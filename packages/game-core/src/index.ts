@@ -1,14 +1,15 @@
-import type {
-  AIReplayEntry,
-  BotStrategy,
-  MapPatch,
-  MatchSnapshot,
-  Movement,
-  NavigationEdge,
-  Obstacle,
-  PatchEvaluation,
-  PlayerSnapshot,
-  Vec2,
+import {
+  MatchSnapshotSchema,
+  type AIReplayEntry,
+  type BotStrategy,
+  type MapPatch,
+  type MatchSnapshot,
+  type Movement,
+  type NavigationEdge,
+  type Obstacle,
+  type PatchEvaluation,
+  type PlayerSnapshot,
+  type Vec2,
 } from "@dopagaki/contracts";
 import {
   createFixturePatchCandidates,
@@ -73,13 +74,27 @@ export interface GameState extends MatchSnapshot {
   cityCoreTagCount: number;
 }
 
-interface RollbackCheckpoint {
+export interface RollbackCheckpoint {
   patchId: string;
   mapVersion: number;
   mapChecksum: string;
   obstacles: Obstacle[];
   navigationEdges: NavigationEdge[];
   lastAppliedPatchId: string | null;
+}
+
+export interface GameCheckpoint {
+  snapshot: MatchSnapshot;
+  durationMs: number;
+  patchIntervalMs: number;
+  humanSpeedMultiplier: number;
+  appliedPatchIds: string[];
+  patchAcknowledgements: Array<[string, Array<[string, string]>]>;
+  botGoalCache: Array<[string, { expiresAtMs: number; goal: Vec2 }]>;
+  interventionSequence: number;
+  lastTargetPlayerId: string | null;
+  rollbackCheckpoint: RollbackCheckpoint | null;
+  cityCoreTagCount: number;
 }
 
 type Inputs = Readonly<Record<string, Movement | undefined>>;
@@ -316,13 +331,39 @@ export function replaceBotWithHuman(
   return candidate;
 }
 
+export function markHumanDisconnected(state: GameState, playerId: string): void {
+  const player = state.players.find((item) => item.id === playerId);
+  if (player === undefined || player.kind !== "HUMAN" || !player.connected) return;
+  player.connected = false;
+  player.velocity = { x: 0, z: 0 };
+  state.lastEventId += 1;
+  state.lastEventText = `${player.displayName} の再接続を待っています`;
+}
+
+export function restoreHumanControl(
+  state: GameState,
+  playerId: string,
+  displayName: string,
+): PlayerSnapshot | null {
+  const player = state.players.find((item) => item.id === playerId);
+  if (player === undefined) return null;
+  player.kind = "HUMAN";
+  player.strategy = null;
+  player.connected = true;
+  player.displayName = displayName;
+  player.velocity = { x: 0, z: 0 };
+  state.lastEventId += 1;
+  state.lastEventText = `${displayName} が再接続しました`;
+  return player;
+}
+
 export function letBotTakeOver(state: GameState, playerId: string): void {
   const player = state.players.find((item) => item.id === playerId);
-  if (player === undefined) return;
+  if (player === undefined || player.kind === "BOT") return;
   player.kind = "BOT";
   player.strategy = player.role === "ONI" ? "CHASE" : "CITY_CORE";
   player.connected = false;
-  player.displayName = `${player.displayName} (Bot)`;
+  if (!player.displayName.endsWith(" (Bot)")) player.displayName = `${player.displayName} (Bot)`;
   state.lastEventId += 1;
   state.lastEventText = `${player.displayName} をBotが引き継ぎました`;
 }
@@ -677,9 +718,11 @@ function applyTag(state: GameState): void {
   if (state.nowMs < state.tagLockedUntilMs) return;
   const oni = state.players.find((player) => player.role === "ONI");
   if (oni === undefined) return;
+  if (oni.kind === "HUMAN" && !oni.connected) return;
   const target = state.players.find(
     (player) =>
       player.role === "RUNNER" &&
+      (player.kind === "BOT" || player.connected) &&
       state.nowMs >= player.protectedUntilMs &&
       distance(oni.position, player.position) <= TAG_DISTANCE,
   );
@@ -781,14 +824,90 @@ export function snapshotOf(state: GameState): MatchSnapshot {
   };
 }
 
-export function checksumOf(state: GameState): string {
-  const canonical = JSON.stringify(snapshotOf(state), (_key, value: unknown) =>
-    typeof value === "number" ? Math.round(value * 1_000) / 1_000 : value,
+export function gameCheckpointOf(state: GameState): GameCheckpoint {
+  return {
+    snapshot: snapshotOf(state),
+    durationMs: state.durationMs,
+    patchIntervalMs: state.patchIntervalMs,
+    humanSpeedMultiplier: state.humanSpeedMultiplier,
+    appliedPatchIds: [...state.appliedPatchIds],
+    patchAcknowledgements: [...state.patchAcknowledgements].map(([patchId, acknowledgements]) => [
+      patchId,
+      [...acknowledgements],
+    ]),
+    botGoalCache: [...state.botGoalCache].map(([playerId, goal]) => [
+      playerId,
+      { expiresAtMs: goal.expiresAtMs, goal: { ...goal.goal } },
+    ]),
+    interventionSequence: state.interventionSequence,
+    lastTargetPlayerId: state.lastTargetPlayerId,
+    rollbackCheckpoint: state.rollbackCheckpoint === null
+      ? null
+      : structuredClone(state.rollbackCheckpoint),
+    cityCoreTagCount: state.cityCoreTagCount,
+  };
+}
+
+export function restoreGame(checkpoint: GameCheckpoint): GameState {
+  const restoredSnapshot = MatchSnapshotSchema.parse(checkpoint.snapshot);
+  const state = createGame({
+    seed: restoredSnapshot.seed,
+    durationMs: checkpoint.durationMs,
+    patchIntervalMs: checkpoint.patchIntervalMs,
+    humanSpeedMultiplier: checkpoint.humanSpeedMultiplier,
+  });
+  Object.assign(state, structuredClone(restoredSnapshot));
+  state.durationMs = checkpoint.durationMs;
+  state.patchIntervalMs = checkpoint.patchIntervalMs;
+  state.humanSpeedMultiplier = checkpoint.humanSpeedMultiplier;
+  state.botRouteCache = new Map();
+  state.botGoalCache = new Map(
+    checkpoint.botGoalCache.map(([playerId, goal]) => [
+      playerId,
+      { expiresAtMs: goal.expiresAtMs, goal: { ...goal.goal } },
+    ]),
   );
+  state.pendingPatches = restoredSnapshot.cityCore.activePatch?.operations.map((operation) =>
+    prepareChunkPatch(restoredSnapshot.world, {
+      patchId: restoredSnapshot.cityCore.activePatch?.patchId ?? "restored-patch",
+      baseMapVersion: restoredSnapshot.cityCore.activePatch?.baseMapVersion ?? restoredSnapshot.mapVersion,
+      obstacle: { ...operation.obstacle },
+    })) ?? [];
+  state.appliedPatchIds = new Set(checkpoint.appliedPatchIds);
+  state.patchAcknowledgements = new Map(
+    checkpoint.patchAcknowledgements.map(([patchId, acknowledgements]) => [
+      patchId,
+      new Map(acknowledgements),
+    ]),
+  );
+  state.interventionSequence = checkpoint.interventionSequence;
+  state.lastTargetPlayerId = checkpoint.lastTargetPlayerId;
+  state.rollbackCheckpoint = checkpoint.rollbackCheckpoint === null
+    ? null
+    : structuredClone(checkpoint.rollbackCheckpoint);
+  state.cityCoreTagCount = checkpoint.cityCoreTagCount;
+  return state;
+}
+
+export function checksumOf(state: GameState): string {
+  const canonical = JSON.stringify(canonicalValue(snapshotOf(state)));
   let hash = 0x811c9dc5;
   for (let index = 0; index < canonical.length; index += 1) {
     hash ^= canonical.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (typeof value === "number") return Math.round(value * 1_000) / 1_000;
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalValue(entry)]),
+    );
+  }
+  return value;
 }

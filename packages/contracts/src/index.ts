@@ -13,6 +13,9 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("JOIN"),
     playerName: z.string().trim().min(1).max(20).optional(),
+    playerToken: z.string().min(32).max(128).optional(),
+    lastAckedEventId: z.number().int().nonnegative().optional(),
+    mapVersion: z.number().int().positive().optional(),
   }),
   z.object({
     type: z.literal("INPUT"),
@@ -217,6 +220,11 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("WELCOME"),
     playerId: z.string(),
     matchId: z.string(),
+    playerToken: z.string().min(32).max(128),
+    resumed: z.boolean(),
+    lastInputSeq: z.number().int().nonnegative(),
+    lastEventId: z.number().int().nonnegative(),
+    mapVersion: z.number().int().positive(),
   }),
   z.object({
     type: z.literal("SNAPSHOT"),
@@ -224,6 +232,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("ERROR"),
+    code: z.enum(["ROOM_FULL", "SESSION_EXPIRED", "INVALID_SESSION", "BAD_MESSAGE"]).optional(),
     message: z.string(),
   }),
   z.object({

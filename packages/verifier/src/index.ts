@@ -258,7 +258,7 @@ function patch(
     baseMapVersion,
     reason,
     targetZone: chunkId(chunkAtPosition(world, target)),
-    target,
+    target: { x: target.x, z: target.z },
     targetPlayerId,
     warningSec: 6,
     operations: [operation],

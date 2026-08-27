@@ -458,13 +458,84 @@ function syncPlayer(player: PlayerSnapshot, shouldRender: boolean): void {
 let socket: WebSocket | null = null;
 let localPlayerId: string | null = null;
 let latestSnapshot: MatchSnapshot | null = null;
+interface PersistedPlayerSession {
+  playerToken: string;
+  playerName: string;
+  playerId: string;
+  matchId: string;
+  lastAckedEventId: number;
+  mapVersion: number;
+  lastAcknowledgedPatchKey: string;
+}
+
+const SESSION_STORAGE_KEY = "dopagaki.player-session.v1";
+let lastPersistedSessionPayload = "";
+
+function readPersistedSession(): PersistedPlayerSession | null {
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedPlayerSession>;
+    if (
+      typeof parsed.playerToken !== "string" ||
+      typeof parsed.playerName !== "string" ||
+      typeof parsed.playerId !== "string" ||
+      typeof parsed.matchId !== "string" ||
+      typeof parsed.lastAckedEventId !== "number" ||
+      typeof parsed.mapVersion !== "number" ||
+      typeof parsed.lastAcknowledgedPatchKey !== "string"
+    ) return null;
+    return parsed as PersistedPlayerSession;
+  } catch {
+    return null;
+  }
+}
+
+const persistedSession = readPersistedSession();
+let playerToken: string | null = persistedSession?.playerToken ?? null;
 let inputSequence = 0;
-let lastEventId = -1;
+let lastEventId = persistedSession?.lastAckedEventId ?? -1;
+let lastKnownMapVersion = persistedSession?.mapVersion ?? 1;
+let lastKnownMatchId = persistedSession?.matchId ?? "";
 let lastScoreboardUpdateAt = Number.NEGATIVE_INFINITY;
-let lastAcknowledgedPatchKey = "";
-let enteredName = "Runner";
+let lastAcknowledgedPatchKey = persistedSession?.lastAcknowledgedPatchKey ?? "";
+let enteredName = persistedSession?.playerName ?? "Runner";
 let connectionTimeoutId: number | null = null;
+let reconnectTimeoutId: number | null = null;
+let reconnectAttempt = 0;
+let reconnectCount = 0;
 const keys = new Set<string>();
+const latencySamples: number[] = [];
+
+function persistPlayerSession(): void {
+  if (playerToken === null || localPlayerId === null || lastKnownMatchId.length === 0) return;
+  const value: PersistedPlayerSession = {
+    playerToken,
+    playerName: enteredName,
+    playerId: localPlayerId,
+    matchId: lastKnownMatchId,
+    lastAckedEventId: Math.max(0, lastEventId),
+    mapVersion: lastKnownMapVersion,
+    lastAcknowledgedPatchKey,
+  };
+  const payload = JSON.stringify(value);
+  if (payload === lastPersistedSessionPayload) return;
+  lastPersistedSessionPayload = payload;
+  window.sessionStorage.setItem(SESSION_STORAGE_KEY, payload);
+}
+
+function clearPlayerSession(): void {
+  window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  playerToken = null;
+  localPlayerId = null;
+  lastKnownMatchId = "";
+  lastEventId = -1;
+  lastKnownMapVersion = 1;
+  lastAcknowledgedPatchKey = "";
+  reconnectAttempt = 0;
+  lastPersistedSessionPayload = "";
+  delete document.body.dataset.playerId;
+}
 
 function socketUrl(): string {
   const configured = import.meta.env.VITE_MATCH_WS_URL as string | undefined;
@@ -483,12 +554,30 @@ function clearConnectionTimeout(): void {
   connectionTimeoutId = null;
 }
 
+function clearReconnectTimeout(): void {
+  if (reconnectTimeoutId === null) return;
+  window.clearTimeout(reconnectTimeoutId);
+  reconnectTimeoutId = null;
+}
+
+function scheduleReconnect(): void {
+  if (playerToken === null || reconnectTimeoutId !== null) return;
+  const delayMs = Math.min(5_000, 250 * 2 ** Math.min(reconnectAttempt, 5));
+  reconnectAttempt += 1;
+  connectionLabel.textContent = `RECONNECTING ${reconnectAttempt}`;
+  reconnectTimeoutId = window.setTimeout(() => {
+    reconnectTimeoutId = null;
+    connect();
+  }, delayMs);
+}
+
 function sendMessage(message: ClientMessage): void {
   if (socket?.readyState === WebSocket.OPEN) socket.send(encodeMessage(message));
 }
 
 function connect(): void {
   clearConnectionTimeout();
+  clearReconnectTimeout();
   socket?.close();
   entryError.textContent = "";
   enterButton.disabled = true;
@@ -496,15 +585,20 @@ function connect(): void {
   const currentSocket = new WebSocket(socketUrl());
   socket = currentSocket;
   connectionTimeoutId = window.setTimeout(() => {
-    if (socket !== currentSocket || localPlayerId !== null || entryPanel.hidden) return;
+    if (socket !== currentSocket) return;
     currentSocket.close();
-    connectionLabel.textContent = "SERVER OFFLINE";
-    entryError.textContent = "Match Serverへ接続できません。npm run dev を確認してください。";
-    enterButton.disabled = false;
   }, 5_000);
   currentSocket.addEventListener("open", () => {
     connectionLabel.textContent = "MATCH SERVER ONLINE";
-    sendMessage({ type: "JOIN", playerName: enteredName });
+    sendMessage({
+      type: "JOIN",
+      playerName: enteredName,
+      ...(playerToken === null ? {} : {
+        playerToken,
+        lastAckedEventId: Math.max(0, lastEventId),
+        mapVersion: lastKnownMapVersion,
+      }),
+    });
   });
   currentSocket.addEventListener("message", (event) => {
     let decoded: unknown;
@@ -517,31 +611,68 @@ function connect(): void {
     if (!parsed.success) return;
     if (parsed.data.type === "WELCOME") {
       clearConnectionTimeout();
+      if (lastKnownMatchId.length > 0 && lastKnownMatchId !== parsed.data.matchId) {
+        lastEventId = -1;
+        lastAcknowledgedPatchKey = "";
+      }
+      playerToken = parsed.data.playerToken;
       localPlayerId = parsed.data.playerId;
+      lastKnownMatchId = parsed.data.matchId;
+      lastKnownMapVersion = parsed.data.mapVersion;
+      inputSequence = Math.max(inputSequence, parsed.data.lastInputSeq);
+      if (parsed.data.resumed) {
+        reconnectCount += 1;
+        document.body.dataset.reconnectCount = String(reconnectCount);
+      }
+      reconnectAttempt = 0;
+      document.body.dataset.playerId = localPlayerId;
+      document.body.dataset.connectionState = "ONLINE";
       entryPanel.hidden = true;
       hud.hidden = false;
       enterButton.disabled = false;
+      persistPlayerSession();
     } else if (parsed.data.type === "SNAPSHOT") {
       latestSnapshot = parsed.data.snapshot;
       syncSnapshot(parsed.data.snapshot);
     } else if (parsed.data.type === "ERROR") {
       entryError.textContent = parsed.data.message;
       enterButton.disabled = false;
+      if (parsed.data.code === "SESSION_EXPIRED" || parsed.data.code === "INVALID_SESSION") {
+        clearPlayerSession();
+        entryPanel.hidden = false;
+        hud.hidden = true;
+        connectionLabel.textContent = "SESSION EXPIRED";
+      }
+    } else if (parsed.data.type === "PONG") {
+      latencySamples.push(Math.max(0, Date.now() - parsed.data.sentAt));
+      if (latencySamples.length > 30) latencySamples.shift();
+      const sorted = [...latencySamples].sort((a, b) => a - b);
+      const p95 = sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)] ?? 0;
+      document.body.dataset.latencyP95 = String(p95);
     }
   });
   currentSocket.addEventListener("close", () => {
     if (socket !== currentSocket) return;
     socket = null;
     clearConnectionTimeout();
-    connectionLabel.textContent = "SERVER OFFLINE";
+    document.body.dataset.connectionState = "OFFLINE";
     document.body.dataset.matchStatus = "DISCONNECTED";
-    if (!entryPanel.hidden) {
+    keys.clear();
+    if (playerToken !== null) {
+      persistPlayerSession();
+      scheduleReconnect();
+    } else {
+      connectionLabel.textContent = "SERVER OFFLINE";
       entryError.textContent = "Match Serverへ接続できません。npm run dev を確認してください。";
       enterButton.disabled = false;
     }
   });
   currentSocket.addEventListener("error", () => currentSocket.close());
 }
+
+window.addEventListener("dopagaki:test-disconnect", () => {
+  if (import.meta.env.DEV) socket?.close(4000, "Local reconnect test");
+});
 
 function formatTime(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1_000));
@@ -561,7 +692,8 @@ function syncScoreboard(snapshot: MatchSnapshot): void {
       rank.textContent = String(index + 1).padStart(2, "0");
       const name = document.createElement("span");
       name.className = "name";
-      name.textContent = `${player.role === "ONI" ? "● " : ""}${player.displayName}`;
+      const offline = player.kind === "HUMAN" && !player.connected ? " [RECONNECTING]" : "";
+      name.textContent = `${player.role === "ONI" ? "● " : ""}${player.displayName}${offline}`;
       const score = document.createElement("span");
       score.className = "score";
       score.textContent = `${(player.oniDurationMs / 1_000).toFixed(1)}s`;
@@ -572,12 +704,23 @@ function syncScoreboard(snapshot: MatchSnapshot): void {
 }
 
 function syncSnapshot(snapshot: MatchSnapshot): void {
+  if (lastKnownMatchId.length > 0 && snapshot.matchId !== lastKnownMatchId) {
+    lastEventId = -1;
+    lastAcknowledgedPatchKey = "";
+  }
+  lastKnownMatchId = snapshot.matchId;
+  lastKnownMapVersion = snapshot.mapVersion;
   document.body.dataset.matchStatus = snapshot.status;
   timeLabel.textContent = formatTime(snapshot.remainingMs);
   mapVersion.textContent = `v${snapshot.mapVersion}`;
   worldLabel.textContent = `${(snapshot.world.sizeMeters / 1_000).toFixed(0)}km / ${snapshot.world.chunksPerAxis}×${snapshot.world.chunksPerAxis}`;
   seedLabel.textContent = String(snapshot.seed);
   document.body.dataset.worldSize = String(snapshot.world.sizeMeters);
+  document.body.dataset.humanPlayers = String(snapshot.players.filter((player) => player.kind === "HUMAN").length);
+  document.body.dataset.connectedHumans = String(
+    snapshot.players.filter((player) => player.kind === "HUMAN" && player.connected).length,
+  );
+  document.body.dataset.lastEventId = String(snapshot.lastEventId);
 
   const localPlayer = snapshot.players.find((player) => player.id === localPlayerId);
   if (localPlayer !== undefined) {
@@ -660,10 +803,10 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
   const lastAppliedPatchId = snapshot.cityCore.lastAppliedPatchId;
   if (lastAppliedPatchId !== null && localPlayerId !== null) {
     const patchKey = `${lastAppliedPatchId}:${snapshot.mapVersion}`;
+    const checksum = computeMapChecksum(snapshot.mapVersion, snapshot.obstacles, snapshot.navigationEdges);
+    document.body.dataset.clientMapChecksum = checksum;
     if (patchKey !== lastAcknowledgedPatchKey) {
-      const checksum = computeMapChecksum(snapshot.mapVersion, snapshot.obstacles, snapshot.navigationEdges);
       lastAcknowledgedPatchKey = patchKey;
-      document.body.dataset.clientMapChecksum = checksum;
       sendMessage({
         type: "PATCH_APPLIED",
         patchId: lastAppliedPatchId,
@@ -673,10 +816,11 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
     }
   }
 
-  if (snapshot.lastEventId !== lastEventId) {
+  if (snapshot.lastEventId > lastEventId) {
     lastEventId = snapshot.lastEventId;
     eventText.textContent = snapshot.lastEventText;
   }
+  persistPlayerSession();
   if (snapshot.nowMs - lastScoreboardUpdateAt >= 250 || snapshot.status === "FINISHED") {
     lastScoreboardUpdateAt = snapshot.nowMs;
     syncScoreboard(snapshot);
@@ -721,12 +865,42 @@ setInterval(() => {
     seq: inputSequence,
     movement: { x, z, sprint: keys.has("ShiftLeft") || keys.has("ShiftRight") },
   });
-}, 50);
+}, 75);
+
+setInterval(() => {
+  if (socket?.readyState === WebSocket.OPEN) sendMessage({ type: "PING", sentAt: Date.now() });
+}, 2_000);
 
 let lastPerformanceUpdate = 0;
+let lastPredictionFrameAt = performance.now();
 scene.onBeforeRenderObservable.add(() => {
-  for (const visual of playerVisuals.values()) {
-    visual.root.position = Vector3.Lerp(visual.root.position, visual.target, 0.22);
+  const frameNow = performance.now();
+  const predictionDeltaSeconds = Math.min(0.05, Math.max(0, frameNow - lastPredictionFrameAt) / 1_000);
+  lastPredictionFrameAt = frameNow;
+  for (const [playerId, visual] of playerVisuals) {
+    if (playerId === localPlayerId && latestSnapshot?.status === "RUNNING") {
+      const inputX = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
+      const inputZ = (keys.has("KeyS") ? 1 : 0) - (keys.has("KeyW") ? 1 : 0);
+      const magnitude = Math.hypot(inputX, inputZ);
+      const sprint = keys.has("ShiftLeft") || keys.has("ShiftRight");
+      const predictedSpeed = 10.5 * (sprint ? 1.12 : 1);
+      if (magnitude > 0) {
+        visual.root.position.x += inputX / magnitude * predictedSpeed * predictionDeltaSeconds;
+        visual.root.position.z += inputZ / magnitude * predictedSpeed * predictionDeltaSeconds;
+      }
+      const reconciliationError = Math.hypot(
+        visual.target.x - visual.root.position.x,
+        visual.target.z - visual.root.position.z,
+      );
+      document.body.dataset.reconciliationError = reconciliationError.toFixed(3);
+      visual.root.position = Vector3.Lerp(
+        visual.root.position,
+        visual.target,
+        reconciliationError > 25 ? 1 : 0.1,
+      );
+    } else {
+      visual.root.position = Vector3.Lerp(visual.root.position, visual.target, 0.22);
+    }
   }
   coreBody.rotation.y += 0.018;
   coreBody.rotation.x += 0.008;
@@ -739,7 +913,8 @@ scene.onBeforeRenderObservable.add(() => {
     lastPerformanceUpdate = performance.now();
     const fps = engine.getFps();
     const activeMeshes = scene.getActiveMeshes().length;
-    performanceLabel.textContent = `FPS ${fps.toFixed(0)} / MESH ${activeMeshes} / ${activeChunkIds.size}A ${preloadedChunkIds.size}P / NAV ${navigationUpdateMs.toFixed(1)}ms`;
+    const latencyP95 = document.body.dataset.latencyP95 ?? "--";
+    performanceLabel.textContent = `FPS ${fps.toFixed(0)} / RTT ${latencyP95}ms / MESH ${activeMeshes} / ${activeChunkIds.size}A ${preloadedChunkIds.size}P / NAV ${navigationUpdateMs.toFixed(1)}ms`;
     performanceLabel.dataset.fps = fps.toFixed(2);
     performanceLabel.dataset.meshes = String(activeMeshes);
     performanceLabel.dataset.activeChunks = String(activeChunkIds.size);
@@ -759,6 +934,11 @@ syncStreamedWorld(
   20260827,
   { position: { x: 0, z: 0 }, velocity: { x: 0, z: 0 } },
 );
+
+document.body.dataset.reconnectCount = "0";
+document.body.dataset.connectionState = "OFFLINE";
+playerName.value = enteredName;
+if (playerToken !== null) connect();
 
 engine.runRenderLoop(() => scene.render());
 window.addEventListener("resize", () => engine.resize());

@@ -5,20 +5,11 @@ import { fileURLToPath } from "node:url";
 import {
   ClientMessageSchema,
   encodeMessage,
-  type Movement,
+  type ClientMessage,
   type ServerMessage,
 } from "@dopagaki/contracts";
-import {
-  acknowledgeMapChecksum,
-  createGame,
-  letBotTakeOver,
-  replaceBotWithHuman,
-  snapshotOf,
-  startGame,
-  stepGame,
-  type GameState,
-} from "@dopagaki/game-core";
 import { WebSocket, WebSocketServer } from "ws";
+import { MatchRoom } from "./room.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "3001", 10);
 const MATCH_DURATION_MS = Number.parseInt(process.env.MATCH_DURATION_MS ?? "600000", 10);
@@ -31,36 +22,22 @@ const TICK_MS = 50;
 const SNAPSHOT_MS = 100;
 const INITIAL_SEED = Number.parseInt(process.env.MATCH_SEED ?? "20260827", 10);
 
-interface ClientState {
-  playerId: string | null;
-  displayName: string;
-  input: Movement;
-}
-
-let seed = INITIAL_SEED;
-let game = newGame(seed);
-let playerSequence = 0;
-const clients = new Map<WebSocket, ClientState>();
-
-function newGame(nextSeed: number): GameState {
-  return createGame({
-    seed: nextSeed,
-    durationMs: MATCH_DURATION_MS,
-    patchIntervalMs: PATCH_INTERVAL_MS,
-    humanSpeedMultiplier: HUMAN_SPEED_MULTIPLIER,
-  });
-}
+const room = new MatchRoom({
+  seed: INITIAL_SEED,
+  durationMs: MATCH_DURATION_MS,
+  patchIntervalMs: PATCH_INTERVAL_MS,
+  humanSpeedMultiplier: HUMAN_SPEED_MULTIPLIER,
+});
+let connectionSequence = 0;
+const clients = new Map<WebSocket, string>();
+const socketsByConnectionId = new Map<string, WebSocket>();
 
 function send(socket: WebSocket, message: ServerMessage): void {
   if (socket.readyState === WebSocket.OPEN) socket.send(encodeMessage(message));
 }
 
-function sendSnapshot(socket: WebSocket): void {
-  send(socket, { type: "SNAPSHOT", snapshot: snapshotOf(game) });
-}
-
 function broadcastSnapshot(): void {
-  const message: ServerMessage = { type: "SNAPSHOT", snapshot: snapshotOf(game) };
+  const message: ServerMessage = { type: "SNAPSHOT", snapshot: room.snapshot() };
   const payload = encodeMessage(message);
   for (const socket of clients.keys()) {
     if (socket.readyState === WebSocket.OPEN) socket.send(payload);
@@ -68,78 +45,63 @@ function broadcastSnapshot(): void {
 }
 
 function restartGame(): void {
-  seed += 1;
-  game = newGame(seed);
-  for (const [socket, client] of clients) {
-    if (client.playerId === null) continue;
-    replaceBotWithHuman(game, client.playerId, client.displayName);
-    send(socket, { type: "WELCOME", playerId: client.playerId, matchId: game.matchId });
-  }
-  if ([...clients.values()].some((client) => client.playerId !== null)) startGame(game);
+  room.restart();
   broadcastSnapshot();
 }
 
-function joinGame(socket: WebSocket, client: ClientState, playerName?: string): void {
-  if (client.playerId !== null) {
-    send(socket, { type: "WELCOME", playerId: client.playerId, matchId: game.matchId });
-    sendSnapshot(socket);
+function joinGame(
+  socket: WebSocket,
+  connectionId: string,
+  request: Extract<ClientMessage, { type: "JOIN" }>,
+): void {
+  const result = room.join(connectionId, request);
+  if (!result.ok) {
+    send(socket, { type: "ERROR", code: result.code, message: result.message });
     return;
   }
-  if (game.status === "FINISHED") restartGame();
-  playerSequence += 1;
-  const playerId = `human-${playerSequence}`;
-  const displayName = playerName ?? `Player ${playerSequence}`;
-  try {
-    replaceBotWithHuman(game, playerId, displayName);
-  } catch (error) {
-    send(socket, { type: "ERROR", message: error instanceof Error ? error.message : "Room is full" });
-    return;
+  const { replacedConnectionId, ...welcome } = result.welcome;
+  if (replacedConnectionId !== null && replacedConnectionId !== connectionId) {
+    socketsByConnectionId.get(replacedConnectionId)?.close(4001, "Replaced by reconnect");
   }
-  client.playerId = playerId;
-  client.displayName = displayName;
-  send(socket, { type: "WELCOME", playerId, matchId: game.matchId });
-  if (game.status === "WAITING") startGame(game);
+  send(socket, { type: "WELCOME", ...welcome });
   broadcastSnapshot();
 }
 
-function handleMessage(socket: WebSocket, client: ClientState, payload: string): void {
+function handleMessage(socket: WebSocket, connectionId: string, payload: string): void {
   let decoded: unknown;
   try {
     decoded = JSON.parse(payload);
   } catch {
-    send(socket, { type: "ERROR", message: "JSONを解釈できません" });
+    send(socket, { type: "ERROR", code: "BAD_MESSAGE", message: "JSONを解釈できません" });
     return;
   }
   const parsed = ClientMessageSchema.safeParse(decoded);
   if (!parsed.success) {
-    send(socket, { type: "ERROR", message: "不正なメッセージです" });
+    send(socket, { type: "ERROR", code: "BAD_MESSAGE", message: "不正なメッセージです" });
     return;
   }
 
   switch (parsed.data.type) {
     case "JOIN":
-      joinGame(socket, client, parsed.data.playerName);
+      joinGame(socket, connectionId, parsed.data);
       break;
     case "INPUT":
-      if (client.playerId !== null) client.input = parsed.data.movement;
+      room.setInput(connectionId, parsed.data.seq, parsed.data.movement);
       break;
     case "RESTART":
-      if (game.status === "FINISHED") restartGame();
+      if (room.game.status === "FINISHED") restartGame();
       break;
     case "PING":
       send(socket, { type: "PONG", sentAt: parsed.data.sentAt });
       break;
     case "PATCH_APPLIED":
-      if (client.playerId !== null) {
-        acknowledgeMapChecksum(
-          game,
-          client.playerId,
-          parsed.data.patchId,
-          parsed.data.mapVersion,
-          parsed.data.checksum,
-        );
-        broadcastSnapshot();
-      }
+      room.acknowledgePatch(
+        connectionId,
+        parsed.data.patchId,
+        parsed.data.mapVersion,
+        parsed.data.checksum,
+      );
+      broadcastSnapshot();
       break;
   }
 }
@@ -156,7 +118,12 @@ const mimeTypes: Record<string, string> = {
 const httpServer = createServer((request, response) => {
   if (request.url === "/health") {
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ ok: true, status: game.status, clients: clients.size }));
+    response.end(JSON.stringify({
+      ok: true,
+      status: room.game.status,
+      clients: room.connectedCount(),
+      sessions: room.sessionCount(),
+    }));
     return;
   }
 
@@ -192,22 +159,21 @@ httpServer.on("upgrade", (request, socket, head) => {
 });
 
 webSocketServer.on("connection", (socket) => {
-  const client: ClientState = {
-    playerId: null,
-    displayName: "Player",
-    input: { x: 0, z: 0, sprint: false },
-  };
-  clients.set(socket, client);
+  connectionSequence += 1;
+  const connectionId = `connection-${connectionSequence}`;
+  clients.set(socket, connectionId);
+  socketsByConnectionId.set(connectionId, socket);
   socket.on("message", (data) => {
     let payload: string;
     if (Array.isArray(data)) payload = Buffer.concat(data).toString("utf8");
     else if (data instanceof ArrayBuffer) payload = Buffer.from(new Uint8Array(data)).toString("utf8");
     else payload = data.toString("utf8");
-    handleMessage(socket, client, payload);
+    handleMessage(socket, connectionId, payload);
   });
   socket.on("close", () => {
     clients.delete(socket);
-    if (client.playerId !== null) letBotTakeOver(game, client.playerId);
+    socketsByConnectionId.delete(connectionId);
+    room.disconnect(connectionId);
   });
   socket.on("error", () => {
     socket.close();
@@ -215,11 +181,7 @@ webSocketServer.on("connection", (socket) => {
 });
 
 setInterval(() => {
-  const inputs: Record<string, Movement> = {};
-  for (const client of clients.values()) {
-    if (client.playerId !== null) inputs[client.playerId] = client.input;
-  }
-  stepGame(game, inputs, TICK_MS);
+  room.tick(TICK_MS);
 }, TICK_MS).unref();
 
 setInterval(broadcastSnapshot, SNAPSHOT_MS).unref();

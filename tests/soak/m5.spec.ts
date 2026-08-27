@@ -12,14 +12,16 @@ test("5km streaming completes a real ten-minute match without resource growth", 
   const heapSamples: number[] = [];
   const loadedChunkSamples: number[] = [];
   const activeChunkSamples: number[] = [];
+  const reconciliationSamples: number[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
   await page.goto("/");
-  await page.getByLabel("CALL SIGN").fill("M4 Soak Runner");
+  await page.getByLabel("CALL SIGN").fill("M5 Soak Runner");
   await page.getByRole("button", { name: /入城する/ }).click();
   await expect(page.locator("body")).toHaveAttribute("data-world-size", "5000");
   await expect(page.locator("body")).toHaveAttribute("data-world-chunks", "400");
   await expect(page.locator("body")).toHaveAttribute("data-match-status", "RUNNING");
+  const originalPlayerId = await page.locator("body").getAttribute("data-player-id");
 
   const movement = ["w", "d", "s", "a"];
   for (let sample = 0; sample < 60; sample += 1) {
@@ -35,6 +37,13 @@ test("5km streaming completes a real ten-minute match without resource growth", 
     );
     loadedChunkSamples.push(Number(await page.locator("body").getAttribute("data-loaded-chunks")));
     activeChunkSamples.push(Number(await page.locator("body").getAttribute("data-active-chunks")));
+    reconciliationSamples.push(Number(await page.locator("body").getAttribute("data-reconciliation-error")));
+    if (sample === 29) {
+      await page.evaluate(() => window.dispatchEvent(new Event("dopagaki:test-disconnect")));
+      await expect(page.locator("body")).toHaveAttribute("data-connection-state", "OFFLINE");
+      await expect(page.locator("body")).toHaveAttribute("data-connection-state", "ONLINE", { timeout: 10_000 });
+      await expect(page.locator("body")).toHaveAttribute("data-player-id", originalPlayerId ?? "");
+    }
   }
 
   await expect(page.locator("#result-panel")).toBeVisible({ timeout: 15_000 });
@@ -59,12 +68,15 @@ test("5km streaming completes a real ten-minute match without resource growth", 
     checksumMatches:
       (await page.locator("body").getAttribute("data-client-map-checksum")) ===
       (await page.locator("body").getAttribute("data-map-checksum")),
+    reconnectCount: Number(await page.locator("body").getAttribute("data-reconnect-count")),
+    latencyP95Ms: Number(await page.locator("body").getAttribute("data-latency-p95")),
+    maximumReconciliationError: Math.max(...reconciliationSamples),
   };
-  await testInfo.attach("m4-soak-report", {
+  await testInfo.attach("m5-soak-report", {
     body: JSON.stringify(report, null, 2),
     contentType: "application/json",
   });
-  process.stdout.write(`M4_SOAK_REPORT ${JSON.stringify(report)}\n`);
+  process.stdout.write(`M5_SOAK_REPORT ${JSON.stringify(report)}\n`);
 
   expect(pageErrors).toEqual([]);
   expect(averageFps).toBeGreaterThanOrEqual(20);
@@ -75,6 +87,9 @@ test("5km streaming completes a real ten-minute match without resource growth", 
   expect(report.finalMapVersion).not.toBe("v1");
   expect(report.rollbackCount).toBe(0);
   expect(report.checksumMatches).toBe(true);
+  expect(report.reconnectCount).toBe(1);
+  expect(report.latencyP95Ms).toBeLessThanOrEqual(150);
+  expect(report.maximumReconciliationError).toBeLessThan(25);
 });
 
 function average(values: number[]): number {

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("players can enter, move, verify a CITY CORE patch, and finish a match", async ({ page }) => {
+test("players can reconnect, move, verify a CITY CORE patch, and finish a match", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -18,6 +18,9 @@ test("players can enter, move, verify a CITY CORE patch, and finish a match", as
   await expect(page.locator("body")).toHaveAttribute("data-preloaded-chunks", "25");
   await expect(page.locator("body")).toHaveAttribute("data-loaded-chunks", "25");
   await expect(page.locator("body")).toHaveAttribute("data-navigation-mode", "GRAPH_COLLIDER");
+  await expect(page.locator("body")).toHaveAttribute("data-human-players", "1");
+  const originalPlayerId = await page.locator("body").getAttribute("data-player-id");
+  expect(originalPlayerId).not.toBeNull();
 
   const secondPage = await page.context().newPage();
   secondPage.on("pageerror", (error) => pageErrors.push(error.message));
@@ -26,8 +29,23 @@ test("players can enter, move, verify a CITY CORE patch, and finish a match", as
   await secondPage.getByRole("button", { name: /入城する/ }).click();
   await expect(secondPage.locator("#hud")).toBeVisible();
   await expect(page.locator("#score-list")).toContainText("Second Runner");
+  await expect(page.locator("body")).toHaveAttribute("data-human-players", "2");
   await expect(secondPage.locator("#score-list")).toContainText("E2E Runner");
   await secondPage.close();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("dopagaki:test-disconnect")));
+  await expect(page.locator("body")).toHaveAttribute("data-connection-state", "OFFLINE", { timeout: 5_000 });
+  await page.waitForTimeout(500);
+  await expect(page.locator("body")).toHaveAttribute("data-connection-state", "ONLINE", { timeout: 10_000 });
+  await expect(page.locator("body")).toHaveAttribute("data-player-id", originalPlayerId ?? "");
+
+  await page.reload();
+  await expect(page.locator("#hud")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator("body")).toHaveAttribute("data-connection-state", "ONLINE");
+  await expect(page.locator("body")).toHaveAttribute("data-player-id", originalPlayerId ?? "");
+  await expect(page.locator("body")).toHaveAttribute("data-reconnect-count", "1");
+  await expect(page.locator("#score-list li")).toHaveCount(4);
+  await expect(page.locator("#score-list")).toContainText("Second Runner [RECONNECTING]");
 
   const warning = page.locator("#patch-warning");
   await expect(warning).toBeVisible({ timeout: 12_000 });
@@ -49,6 +67,9 @@ test("players can enter, move, verify a CITY CORE patch, and finish a match", as
     )
     .toBe(true);
   await expect(page.locator("body")).toHaveAttribute("data-rollback-count", "0");
+  await expect
+    .poll(async () => Number(await page.locator("body").getAttribute("data-latency-p95")), { timeout: 8_000 })
+    .toBeLessThanOrEqual(150);
 
   const position = page.locator("#player-position");
   const before = Number(await position.getAttribute("data-z"));

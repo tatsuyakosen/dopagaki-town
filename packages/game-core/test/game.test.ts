@@ -4,7 +4,12 @@ import {
   acknowledgeMapChecksum,
   checksumOf,
   createGame,
+  gameCheckpointOf,
+  markHumanDisconnected,
   replaceBotWithHuman,
+  restoreGame,
+  restoreHumanControl,
+  snapshotOf,
   startGame,
   stepGame,
 } from "../src/index.js";
@@ -157,5 +162,44 @@ describe("authoritative tag rules", () => {
     expect(cityBot.role).toBe("ONI");
     expect(game.cityCoreTagCount).toBe(1);
     expect(game.aiReplay.at(-1)?.phase).toBe("TAG_CHANGED");
+  });
+
+  it("stops and excludes a disconnected human from tag resolution until restored", () => {
+    const game = createGame({ seed: 20260827, durationMs: 2_000, patchIntervalMs: 6_000 });
+    const human = replaceBotWithHuman(game, "human-reconnect", "Reconnect Runner");
+    const target = game.players.find((player) => player.id !== human.id);
+    expect(target).toBeDefined();
+    if (target === undefined) return;
+    for (const player of game.players) player.role = "RUNNER";
+    human.role = "ONI";
+    human.position = { x: 0, z: 0 };
+    target.position = { x: 2, z: 0 };
+    startGame(game);
+    markHumanDisconnected(game, human.id);
+
+    stepGame(game, {}, 1_000);
+    expect(human.position).toEqual({ x: 0, z: 0 });
+    expect(human.role).toBe("ONI");
+    expect(target.role).toBe("RUNNER");
+
+    restoreHumanControl(game, human.id, "Reconnect Runner");
+    stepGame(game, {}, 50);
+    expect(human.role).toBe("RUNNER");
+    expect(target.role).toBe("ONI");
+  });
+
+  it("restores a prepared intervention checkpoint deterministically", () => {
+    const original = createGame({ seed: 20260827, durationMs: 8_000, patchIntervalMs: 6_000 });
+    startGame(original);
+    stepGame(original, {}, 50);
+    expect(original.cityCore.patchPhase).toBe("PREPARED");
+
+    const restored = restoreGame(gameCheckpointOf(original));
+    expect(snapshotOf(restored)).toEqual(snapshotOf(original));
+    while (original.status === "RUNNING") {
+      stepGame(original, {}, 50);
+      stepGame(restored, {}, 50);
+    }
+    expect(checksumOf(restored)).toBe(checksumOf(original));
   });
 });

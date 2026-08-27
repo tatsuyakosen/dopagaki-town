@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ClientMessageSchema, MapPatchSchema, MatchSnapshotSchema } from "../src/index.js";
+import {
+  ClientMessageSchema,
+  MapPatchSchema,
+  MatchSnapshotSchema,
+  ServerMessageSchema,
+} from "../src/index.js";
 
 describe("runtime contracts", () => {
   it("accepts a normalized movement payload", () => {
@@ -14,6 +19,28 @@ describe("runtime contracts", () => {
 
   it("rejects a malformed snapshot", () => {
     expect(() => MatchSnapshotSchema.parse({ matchId: "broken" })).toThrow();
+  });
+
+  it("validates reconnect tokens and acknowledgement metadata", () => {
+    const playerToken = "a".repeat(48);
+    expect(ClientMessageSchema.parse({
+      type: "JOIN",
+      playerName: "Reconnect Player",
+      playerToken,
+      lastAckedEventId: 12,
+      mapVersion: 3,
+    })).toMatchObject({ type: "JOIN", playerToken, lastAckedEventId: 12, mapVersion: 3 });
+    expect(() => ClientMessageSchema.parse({ type: "JOIN", playerToken: "short" })).toThrow();
+    expect(ServerMessageSchema.parse({
+      type: "WELCOME",
+      playerId: "human-1",
+      matchId: "local-1",
+      playerToken,
+      resumed: true,
+      lastInputSeq: 7,
+      lastEventId: 12,
+      mapVersion: 3,
+    })).toMatchObject({ type: "WELCOME", resumed: true, playerToken });
   });
 
   it("accepts the allowlisted MapPatch DSL and rejects unknown operations", () => {
