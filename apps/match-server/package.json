@@ -1,0 +1,11 @@
+{
+  "name": "@dopagaki/match-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@dopagaki/contracts": "*",
+    "@dopagaki/game-core": "*",
+    "ws": "^8.21.3"
+  }
+}
