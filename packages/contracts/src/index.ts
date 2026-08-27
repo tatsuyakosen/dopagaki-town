@@ -21,6 +21,12 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("RESTART") }),
   z.object({ type: z.literal("PING"), sentAt: z.number().finite() }),
+  z.object({
+    type: z.literal("PATCH_APPLIED"),
+    patchId: z.string().min(1),
+    mapVersion: z.number().int().positive(),
+    checksum: z.string().regex(/^[0-9a-f]{8}$/),
+  }),
 ]);
 
 export const RoleSchema = z.enum(["ONI", "RUNNER"]);
@@ -53,13 +59,117 @@ export const PlayerSnapshotSchema = z.object({
 
 export const ObstacleSchema = z.object({
   id: z.string(),
-  kind: z.enum(["BUILDING", "BARRIER", "STATION"]),
+  kind: z.enum(["BUILDING", "BARRIER", "STATION", "ALLEY_GATE", "BRIDGE"]),
   x: z.number(),
   z: z.number(),
   width: z.number().positive(),
   depth: z.number().positive(),
   height: z.number().positive(),
+  elevation: z.number().nonnegative().optional(),
   active: z.boolean(),
+});
+
+export const NavigationEdgeSchema = z.object({
+  id: z.string().min(1),
+  fromNodeId: z.string().min(1),
+  toNodeId: z.string().min(1),
+  kind: z.enum(["ALLEY", "BRIDGE"]),
+  active: z.boolean(),
+});
+
+const RaiseBarrierOperationSchema = z.object({
+  type: z.literal("raise_barrier"),
+  anchorId: z.string().min(1),
+  obstacle: ObstacleSchema.extend({ kind: z.literal("BARRIER") }),
+});
+
+const OpenAlleyOperationSchema = z.object({
+  type: z.literal("open_alley"),
+  anchorId: z.string().min(1),
+  gateId: z.string().min(1),
+  obstacle: ObstacleSchema.extend({ kind: z.literal("ALLEY_GATE") }),
+  edge: NavigationEdgeSchema.extend({ kind: z.literal("ALLEY") }),
+});
+
+const SpawnRooftopBridgeOperationSchema = z.object({
+  type: z.literal("spawn_rooftop_bridge"),
+  anchorId: z.string().min(1),
+  bridgeId: z.string().min(1),
+  obstacle: ObstacleSchema.extend({ kind: z.literal("BRIDGE") }),
+  edge: NavigationEdgeSchema.extend({ kind: z.literal("BRIDGE") }),
+});
+
+export const MapPatchOperationSchema = z.discriminatedUnion("type", [
+  RaiseBarrierOperationSchema,
+  OpenAlleyOperationSchema,
+  SpawnRooftopBridgeOperationSchema,
+]);
+
+export const StageSpecSchema = z.object({
+  seed: z.number().int(),
+  theme: z.string().min(1),
+  stations: z.array(z.string()).min(4).max(6),
+  spawnZones: z.array(z.string()).length(4),
+  initialOni: z.string().min(1),
+  routes: z.array(z.enum(["street", "alley", "rooftop"])).min(2),
+  mutationAnchors: z.array(z.string()).min(3),
+  cityCoreSpawn: z.string().min(1),
+});
+
+export const MapPatchSchema = z.object({
+  patchId: z.string().min(1),
+  baseMapVersion: z.number().int().positive(),
+  reason: z.string().min(1),
+  targetZone: z.string().min(1),
+  target: Vec2Schema,
+  targetPlayerId: z.string().nullable(),
+  warningSec: z.number().min(5).max(15),
+  operations: z.array(MapPatchOperationSchema).min(1).max(2),
+  expectedEffect: z.object({
+    encounterRatePct: z.number().min(-100).max(100),
+    routeDiversityPct: z.number().min(-100).max(100),
+  }),
+});
+
+export const ConstraintIdSchema = z.enum([
+  "F-01",
+  "F-02",
+  "F-03",
+  "F-04",
+  "F-05",
+  "F-06",
+  "F-07",
+  "F-08",
+  "VERSION",
+  "DUPLICATE",
+  "SCHEMA",
+]);
+
+export const ConstraintViolationSchema = z.object({
+  id: ConstraintIdSchema,
+  message: z.string().min(1),
+});
+
+export const PatchEvaluationSchema = z.object({
+  patch: MapPatchSchema,
+  accepted: z.boolean(),
+  violations: z.array(ConstraintViolationSchema),
+  routeCountByPlayer: z.record(z.string(), z.number().int().nonnegative()),
+  rolloutScore: z.number().finite(),
+  latencyMs: z.number().nonnegative(),
+  estimatedCostYen: z.number().nonnegative(),
+});
+
+export const AIReplayEntrySchema = z.object({
+  sequence: z.number().int().nonnegative(),
+  atMs: z.number().nonnegative(),
+  phase: z.enum(["STAGE_GENERATED", "CANDIDATES_EVALUATED", "PATCH_COMMITTED", "ROLLBACK", "TAG_CHANGED"]),
+  patchId: z.string().nullable(),
+  selectedPatchId: z.string().nullable(),
+  summary: z.string(),
+  candidates: z.array(PatchEvaluationSchema),
+  latencyMs: z.number().nonnegative(),
+  estimatedCostYen: z.number().nonnegative(),
 });
 
 export const CityCoreSchema = z.object({
@@ -72,6 +182,8 @@ export const CityCoreSchema = z.object({
   patchId: z.string(),
   patchPhase: z.enum(["IDLE", "PREPARED"]),
   affectedChunkIds: z.array(z.string()),
+  activePatch: MapPatchSchema.nullable(),
+  lastAppliedPatchId: z.string().nullable(),
 });
 
 export const MatchStatusSchema = z.enum(["WAITING", "RUNNING", "FINISHED"]);
@@ -90,6 +202,11 @@ export const MatchSnapshotSchema = z.object({
   lastEventText: z.string(),
   winnerId: z.string().nullable(),
   tagLockedUntilMs: z.number().nonnegative(),
+  stageSpec: StageSpecSchema,
+  navigationEdges: z.array(NavigationEdgeSchema),
+  mapChecksum: z.string().regex(/^[0-9a-f]{8}$/),
+  rollbackCount: z.number().int().nonnegative(),
+  aiReplay: z.array(AIReplayEntrySchema),
   players: z.array(PlayerSnapshotSchema).length(4),
   obstacles: z.array(ObstacleSchema),
   cityCore: CityCoreSchema,
@@ -124,6 +241,14 @@ export type BotStrategy = z.infer<typeof BotStrategySchema>;
 export type WorldSpec = z.infer<typeof WorldSpecSchema>;
 export type PlayerSnapshot = z.infer<typeof PlayerSnapshotSchema>;
 export type Obstacle = z.infer<typeof ObstacleSchema>;
+export type NavigationEdge = z.infer<typeof NavigationEdgeSchema>;
+export type MapPatchOperation = z.infer<typeof MapPatchOperationSchema>;
+export type StageSpec = z.infer<typeof StageSpecSchema>;
+export type MapPatch = z.infer<typeof MapPatchSchema>;
+export type ConstraintId = z.infer<typeof ConstraintIdSchema>;
+export type ConstraintViolation = z.infer<typeof ConstraintViolationSchema>;
+export type PatchEvaluation = z.infer<typeof PatchEvaluationSchema>;
+export type AIReplayEntry = z.infer<typeof AIReplayEntrySchema>;
 export type CityCore = z.infer<typeof CityCoreSchema>;
 export type MatchStatus = z.infer<typeof MatchStatusSchema>;
 export type MatchSnapshot = z.infer<typeof MatchSnapshotSchema>;

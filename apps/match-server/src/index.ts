@@ -9,6 +9,7 @@ import {
   type ServerMessage,
 } from "@dopagaki/contracts";
 import {
+  acknowledgeMapChecksum,
   createGame,
   letBotTakeOver,
   replaceBotWithHuman,
@@ -127,6 +128,18 @@ function handleMessage(socket: WebSocket, client: ClientState, payload: string):
       break;
     case "PING":
       send(socket, { type: "PONG", sentAt: parsed.data.sentAt });
+      break;
+    case "PATCH_APPLIED":
+      if (client.playerId !== null) {
+        acknowledgeMapChecksum(
+          game,
+          client.playerId,
+          parsed.data.patchId,
+          parsed.data.mapVersion,
+          parsed.data.checksum,
+        );
+        broadcastSnapshot();
+      }
       break;
   }
 }

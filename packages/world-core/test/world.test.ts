@@ -113,4 +113,21 @@ describe("5km logical city", () => {
     expect(committed.committedMapVersion).toBe(5);
     expect(() => commitChunkPatch(committed, 5)).toThrow(/already committed/);
   });
+
+  it("rejects static city geometry from the patch preparation boundary", () => {
+    expect(() => prepareChunkPatch(DEFAULT_WORLD_SPEC, {
+      patchId: "patch-forbidden-building",
+      baseMapVersion: 1,
+      obstacle: {
+        id: "forbidden-building",
+        kind: "BUILDING",
+        x: 0,
+        z: 0,
+        width: 20,
+        depth: 20,
+        height: 30,
+        active: true,
+      },
+    })).toThrow(/protected static/);
+  });
 });

@@ -199,6 +199,9 @@ body[data-match-status="RUNNING"] #connection-dot {
 .event-panel p { margin: 9px 0 2px; font-size: 12px; line-height: 1.5; }
 .patch-warning { margin: 13px -4px -4px; padding: 10px; border: 1px solid rgba(246,200,95,.35); background: rgba(246,200,95,.08); color: var(--amber); font-size: 10px; }
 .patch-warning b { float: right; }
+.patch-warning strong, .patch-warning small { display: block; margin-top: 6px; }
+.patch-warning strong { color: #fff3c5; font-size: 11px; letter-spacing: .08em; }
+.patch-warning small { color: rgba(255,243,197,.7); line-height: 1.4; }
 
 .score-panel { position: absolute; right: 27px; top: 112px; width: 265px; padding: 15px 17px; }
 .panel-title { display: flex; justify-content: space-between; color: #9bb1aa; font-size: 9px; letter-spacing: .1em; }

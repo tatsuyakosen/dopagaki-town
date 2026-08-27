@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   TAG_PROTECTION_MS,
+  acknowledgeMapChecksum,
   checksumOf,
   createGame,
   replaceBotWithHuman,
@@ -80,9 +81,9 @@ describe("authoritative tag rules", () => {
   });
 
   it("activates the collider only after the warning interval completes", () => {
-    const game = createGame({ seed: 20260827, durationMs: 5_000, patchIntervalMs: 2_000 });
+    const game = createGame({ seed: 20260827, durationMs: 7_000, patchIntervalMs: 6_000 });
     startGame(game);
-    while (game.nowMs < 1_950) stepGame(game, {}, 50);
+    while (game.nowMs < 5_950) stepGame(game, {}, 50);
     expect(game.cityCore.warningStartedAtMs).not.toBeNull();
     expect(game.cityCore.patchPhase).toBe("PREPARED");
     expect(game.cityCore.affectedChunkIds).toHaveLength(2);
@@ -92,5 +93,69 @@ describe("authoritative tag rules", () => {
     expect(game.mapVersion).toBe(2);
     expect(game.cityCore.patchPhase).toBe("IDLE");
     expect(game.obstacles.filter((obstacle) => obstacle.kind === "BARRIER" && obstacle.active)).toHaveLength(1);
+  });
+
+  it("applies all three allowlisted operations with rejected candidates in AI Replay", () => {
+    const game = createGame({ seed: 20260827, durationMs: 18_000, patchIntervalMs: 6_000 });
+    startGame(game);
+    while (game.status === "RUNNING") stepGame(game, {}, 50);
+
+    const commits = game.aiReplay.filter((entry) => entry.phase === "PATCH_COMMITTED");
+    const decisions = game.aiReplay.filter((entry) => entry.phase === "CANDIDATES_EVALUATED");
+    expect(commits.map((entry) => entry.summary)).toEqual(expect.arrayContaining([
+      expect.stringContaining("raise_barrier"),
+      expect.stringContaining("open_alley"),
+      expect.stringContaining("spawn_rooftop_bridge"),
+    ]));
+    expect(decisions).toHaveLength(3);
+    for (const decision of decisions) {
+      expect(decision.candidates).toHaveLength(3);
+      expect(decision.candidates[0]?.violations.map((violation) => violation.id)).toContain("F-06");
+      expect(decision.selectedPatchId).toBe(decision.candidates[2]?.patch.patchId);
+    }
+    expect(game.mapVersion).toBe(4);
+    expect(game.navigationEdges.some((edge) => edge.kind === "ALLEY" && edge.active)).toBe(true);
+    expect(game.navigationEdges.some((edge) => edge.kind === "BRIDGE" && edge.active)).toBe(true);
+    expect(game.obstacles.find((obstacle) => obstacle.id === "alley-gate-core")?.active).toBe(false);
+    expect(game.obstacles.find((obstacle) => obstacle.id === "bridge-core")?.active).toBe(true);
+  });
+
+  it("rolls back to the previous MapVersion on a client checksum mismatch", () => {
+    for (let seed = 1; seed <= 10; seed += 1) {
+      const game = createGame({ seed, durationMs: 7_000, patchIntervalMs: 6_000 });
+      startGame(game);
+      while (game.mapVersion === 1 && game.status === "RUNNING") stepGame(game, {}, 50);
+      const patchId = game.cityCore.lastAppliedPatchId;
+      expect(patchId).not.toBeNull();
+      if (patchId === null) continue;
+
+      expect(acknowledgeMapChecksum(game, "client-bad", patchId, 2, "deadbeef")).toBe(false);
+      expect(game.mapVersion).toBe(1);
+      expect(game.rollbackCount).toBe(1);
+      expect(game.aiReplay.at(-1)?.phase).toBe("ROLLBACK");
+    }
+  });
+
+  it("reproduces a CITY CORE-assisted tag with the CITY_CORE strategy Bot", () => {
+    const game = createGame({ seed: 20260827, durationMs: 2_000, patchIntervalMs: 6_000 });
+    const cityBot = game.players.find((player) => player.strategy === "CITY_CORE");
+    const oni = game.players.find((player) => player !== cityBot);
+    expect(cityBot).toBeDefined();
+    expect(oni).toBeDefined();
+    if (cityBot === undefined || oni === undefined) return;
+    for (const player of game.players) player.kind = "HUMAN";
+    startGame(game);
+    stepGame(game, {}, 50);
+    for (const player of game.players) player.role = "RUNNER";
+    oni.role = "ONI";
+    cityBot.kind = "BOT";
+    oni.kind = "BOT";
+    cityBot.position = { ...game.cityCore.target };
+    oni.position = { x: game.cityCore.target.x + 2.5, z: game.cityCore.target.z };
+    stepGame(game, {}, 50);
+
+    expect(cityBot.role).toBe("ONI");
+    expect(game.cityCoreTagCount).toBe(1);
+    expect(game.aiReplay.at(-1)?.phase).toBe("TAG_CHANGED");
   });
 });

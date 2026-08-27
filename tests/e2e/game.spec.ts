@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("players can enter, move, observe CITY CORE, and finish a match", async ({ page }) => {
+test("players can enter, move, verify a CITY CORE patch, and finish a match", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -29,6 +29,27 @@ test("players can enter, move, observe CITY CORE, and finish a match", async ({ 
   await expect(secondPage.locator("#score-list")).toContainText("E2E Runner");
   await secondPage.close();
 
+  const warning = page.locator("#patch-warning");
+  await expect(warning).toBeVisible({ timeout: 12_000 });
+  await expect(page.locator("#patch-operation")).not.toHaveText("");
+  await expect(page.locator("#patch-reason")).not.toHaveText("");
+  await expect(page.locator("#patch-effect")).toContainText("encounter");
+  const warningSeconds = Number.parseFloat((await page.locator("#patch-countdown").textContent()) ?? "0");
+  expect(warningSeconds).toBeGreaterThanOrEqual(5);
+  await page.screenshot({ path: "test-results/city-core-warning.png", fullPage: true });
+  await expect(page.locator("#map-version")).not.toHaveText("v1", { timeout: 8_000 });
+  await expect
+    .poll(
+      async () => {
+        const body = page.locator("body");
+        return (await body.getAttribute("data-client-map-checksum")) ===
+          (await body.getAttribute("data-map-checksum"));
+      },
+      { timeout: 5_000 },
+    )
+    .toBe(true);
+  await expect(page.locator("body")).toHaveAttribute("data-rollback-count", "0");
+
   const position = page.locator("#player-position");
   const before = Number(await position.getAttribute("data-z"));
   await page.keyboard.down("w");
@@ -44,7 +65,6 @@ test("players can enter, move, observe CITY CORE, and finish a match", async ({ 
   expect(Number(await page.locator("body").getAttribute("data-loaded-chunks"))).toBeLessThanOrEqual(25);
   expect(Number(await page.locator("body").getAttribute("data-active-chunks"))).toBeLessThanOrEqual(9);
 
-  await expect(page.locator("#map-version")).not.toHaveText("v1", { timeout: 6_000 });
   await expect
     .poll(async () => Number(await page.locator("#performance-label").getAttribute("data-fps")), { timeout: 10_000 })
     .toBeGreaterThan(20);

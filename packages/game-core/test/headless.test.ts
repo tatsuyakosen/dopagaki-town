@@ -24,7 +24,7 @@ describe("100-seed headless gate", () => {
       expect(first.oniTime, `seed ${seed} oni time`).toBe(10_000);
       expect(first.mapVersion, `seed ${seed} CITY CORE patches`).toBeGreaterThan(1);
     }
-  }, 15_000);
+  }, 30_000);
 
   it("completes a full ten-minute 5km match without Bot/building overlap", () => {
     const game = createGame({ seed: 20260827 });

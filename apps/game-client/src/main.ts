@@ -26,6 +26,7 @@ import {
   calculateChunkWindow,
   chunkAtPosition,
   chunkId,
+  computeMapChecksum,
   createChunkObstacles,
   createWorldMetadata,
   type ChunkMetadata,
@@ -57,6 +58,9 @@ const seedLabel = required<HTMLElement>("#seed-label");
 const eventText = required<HTMLElement>("#event-text");
 const patchWarning = required<HTMLElement>("#patch-warning");
 const patchCountdown = required<HTMLElement>("#patch-countdown");
+const patchOperation = required<HTMLElement>("#patch-operation");
+const patchReason = required<HTMLElement>("#patch-reason");
+const patchEffect = required<HTMLElement>("#patch-effect");
 const scoreList = required<HTMLOListElement>("#score-list");
 const playerPosition = required<HTMLElement>("#player-position");
 const performanceLabel = required<HTMLElement>("#performance-label");
@@ -251,8 +255,8 @@ function createObstacleVisual(obstacle: Obstacle, parent?: TransformNode): Abstr
       { width: obstacle.width, depth: obstacle.depth, height: obstacle.height },
       scene,
     );
-    mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
-    mesh.material = barrierMaterial;
+    mesh.position.set(obstacle.x, (obstacle.elevation ?? 0) + obstacle.height / 2, obstacle.z);
+    mesh.material = obstacle.kind === "BRIDGE" ? roofMaterial : barrierMaterial;
     if (parent !== undefined) mesh.parent = parent;
     mesh.freezeWorldMatrix();
   }
@@ -457,6 +461,7 @@ let latestSnapshot: MatchSnapshot | null = null;
 let inputSequence = 0;
 let lastEventId = -1;
 let lastScoreboardUpdateAt = Number.NEGATIVE_INFINITY;
+let lastAcknowledgedPatchKey = "";
 let enteredName = "Runner";
 let connectionTimeoutId: number | null = null;
 const keys = new Set<string>();
@@ -591,6 +596,12 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
       const obstacleChunkId = chunkId(chunkAtPosition(snapshot.world, obstacle));
       syncObstacle(obstacle, preloadedChunkIds.has(obstacleChunkId));
     }
+    const snapshotObstacleIds = new Set(snapshot.obstacles.map((obstacle) => obstacle.id));
+    for (const [obstacleId, visual] of obstacleVisuals) {
+      if (snapshotObstacleIds.has(obstacleId)) continue;
+      visual.setEnabled(false);
+      obstacleActiveStates.set(obstacleId, false);
+    }
     roleLabel.textContent = localPlayer.role === "ONI" ? "鬼 / ONI" : "逃走者";
     roleLabel.style.color = localPlayer.role === "ONI" ? "#ff6977" : "#59f5bd";
     dangerBanner.hidden = localPlayer.role !== "ONI";
@@ -615,22 +626,51 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
     barrierPreview.isVisible = false;
     const remainingMs = Math.max(0, snapshot.cityCore.patchAppliesAtMs - snapshot.nowMs);
     patchCountdown.textContent = `${(remainingMs / 1_000).toFixed(1)}s`;
-    const futureBarrier = snapshot.obstacles.find(
-      (obstacle) => obstacle.id === `barrier-${snapshot.cityCore.patchIndex}`,
-    );
-    if (futureBarrier !== undefined && targetIsPreloaded) {
+    const activePatch = snapshot.cityCore.activePatch;
+    const operation = activePatch?.operations[0];
+    if (activePatch !== null && activePatch !== undefined) {
+      patchOperation.textContent = operation?.type.replaceAll("_", " ").toUpperCase() ?? "MAP PATCH";
+      patchReason.textContent = activePatch.reason.replaceAll("_", " ");
+      patchEffect.textContent = `R ${snapshot.cityCore.radius}m / encounter ${activePatch.expectedEffect.encounterRatePct >= 0 ? "+" : ""}${activePatch.expectedEffect.encounterRatePct}% / diversity ${activePatch.expectedEffect.routeDiversityPct >= 0 ? "+" : ""}${activePatch.expectedEffect.routeDiversityPct}%`;
+    }
+    const futureObstacle = operation?.obstacle;
+    if (futureObstacle !== undefined && targetIsPreloaded) {
       const riseProgress = Math.max(0, Math.min(1, 1 - remainingMs / 1_000));
       const eased = riseProgress * riseProgress * (3 - 2 * riseProgress);
       barrierPreview.isVisible = true;
-      barrierPreview.scaling.set(futureBarrier.width, futureBarrier.height, futureBarrier.depth);
-      barrierPreview.position.set(
-        futureBarrier.x,
-        -futureBarrier.height / 2 + futureBarrier.height * eased,
-        futureBarrier.z,
+      barrierPreview.scaling.set(
+        futureObstacle.width,
+        operation?.type === "open_alley" ? futureObstacle.height * (1 - eased * 0.9) : futureObstacle.height,
+        futureObstacle.depth,
       );
+      const targetElevation = futureObstacle.elevation ?? 0;
+      const previewY = operation?.type === "raise_barrier"
+        ? -futureObstacle.height / 2 + futureObstacle.height * eased
+        : operation?.type === "spawn_rooftop_bridge"
+          ? targetElevation - 3 + 3 * eased + futureObstacle.height / 2
+          : targetElevation + futureObstacle.height / 2;
+      barrierPreview.position.set(futureObstacle.x, previewY, futureObstacle.z);
     }
   } else {
     barrierPreview.isVisible = false;
+  }
+
+  document.body.dataset.rollbackCount = String(snapshot.rollbackCount);
+  document.body.dataset.mapChecksum = snapshot.mapChecksum;
+  const lastAppliedPatchId = snapshot.cityCore.lastAppliedPatchId;
+  if (lastAppliedPatchId !== null && localPlayerId !== null) {
+    const patchKey = `${lastAppliedPatchId}:${snapshot.mapVersion}`;
+    if (patchKey !== lastAcknowledgedPatchKey) {
+      const checksum = computeMapChecksum(snapshot.mapVersion, snapshot.obstacles, snapshot.navigationEdges);
+      lastAcknowledgedPatchKey = patchKey;
+      document.body.dataset.clientMapChecksum = checksum;
+      sendMessage({
+        type: "PATCH_APPLIED",
+        patchId: lastAppliedPatchId,
+        mapVersion: snapshot.mapVersion,
+        checksum,
+      });
+    }
   }
 
   if (snapshot.lastEventId !== lastEventId) {

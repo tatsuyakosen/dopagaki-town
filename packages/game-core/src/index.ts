@@ -1,16 +1,28 @@
 import type {
+  AIReplayEntry,
   BotStrategy,
+  MapPatch,
   MatchSnapshot,
   Movement,
+  NavigationEdge,
   Obstacle,
+  PatchEvaluation,
   PlayerSnapshot,
   Vec2,
 } from "@dopagaki/contracts";
+import {
+  createFixturePatchCandidates,
+  createFixtureStageSpec,
+  evaluatePatch,
+  selectPatchCandidate,
+  type VerifierContext,
+} from "@dopagaki/verifier";
 import {
   DEFAULT_WORLD_SPEC,
   chunkAtPosition,
   chunkId,
   commitChunkPatch,
+  computeMapChecksum,
   createCityObstacles,
   createRoadGraph,
   createWorldMetadata,
@@ -52,7 +64,22 @@ export interface GameState extends MatchSnapshot {
   staticObstaclesByChunk: Map<string, Obstacle[]>;
   botRouteCache: Map<string, { key: string; path: RoadNode[] }>;
   botGoalCache: Map<string, { expiresAtMs: number; goal: Vec2 }>;
-  pendingPatch: PreparedChunkPatch | null;
+  pendingPatches: PreparedChunkPatch[];
+  appliedPatchIds: Set<string>;
+  patchAcknowledgements: Map<string, Map<string, string>>;
+  interventionSequence: number;
+  lastTargetPlayerId: string | null;
+  rollbackCheckpoint: RollbackCheckpoint | null;
+  cityCoreTagCount: number;
+}
+
+interface RollbackCheckpoint {
+  patchId: string;
+  mapVersion: number;
+  mapChecksum: string;
+  obstacles: Obstacle[];
+  navigationEdges: NavigationEdge[];
+  lastAppliedPatchId: string | null;
 }
 
 type Inputs = Readonly<Record<string, Movement | undefined>>;
@@ -117,6 +144,19 @@ const BARRIER_ANCHORS: ReadonlyArray<Obstacle> = [
   },
 ];
 
+const ALLEY_GATE_ANCHORS: ReadonlyArray<Obstacle> = [
+  {
+    id: "alley-gate-core",
+    kind: "ALLEY_GATE",
+    x: 125,
+    z: 75,
+    width: 10,
+    depth: 3,
+    height: 4,
+    active: true,
+  },
+];
+
 function spawnPlayer(
   id: string,
   displayName: string,
@@ -171,7 +211,25 @@ export function createGame(config: GameConfig): GameState {
   if (firstTarget === undefined) {
     throw new Error("CITY CORE requires at least one mutation anchor");
   }
-  const patchIntervalMs = config.patchIntervalMs ?? DEFAULT_PATCH_INTERVAL_MS;
+  const patchIntervalMs = Math.max(6_000, config.patchIntervalMs ?? DEFAULT_PATCH_INTERVAL_MS);
+  const dynamicObstacles = [
+    ...BARRIER_ANCHORS.map((barrier) => ({ ...barrier })),
+    ...ALLEY_GATE_ANCHORS.map((gate) => ({ ...gate })),
+  ];
+  const navigationEdges: NavigationEdge[] = [];
+  const mapChecksum = computeMapChecksum(1, dynamicObstacles, navigationEdges);
+  const stageSpec = createFixtureStageSpec(config.seed, worldMetadata, players, DEFAULT_WORLD_SPEC);
+  const aiReplay: AIReplayEntry[] = [{
+    sequence: 0,
+    atMs: 0,
+    phase: "STAGE_GENERATED",
+    patchId: null,
+    selectedPatchId: null,
+    summary: `Fixture StageSpec: ${stageSpec.theme}`,
+    candidates: [],
+    latencyMs: 2,
+    estimatedCostYen: 0,
+  }];
 
   return {
     matchId: `local-${config.seed}`,
@@ -190,18 +248,25 @@ export function createGame(config: GameConfig): GameState {
     lastEventText: "入場者を待っています",
     winnerId: null,
     tagLockedUntilMs: 0,
+    stageSpec,
+    navigationEdges,
+    mapChecksum,
+    rollbackCount: 0,
+    aiReplay,
     players,
-    obstacles: BARRIER_ANCHORS.map((barrier) => ({ ...barrier })),
+    obstacles: dynamicObstacles,
     cityCore: {
       position: { x: 0, z: 0 },
       target: { x: firstTarget.x, z: firstTarget.z },
       warningStartedAtMs: null,
       patchAppliesAtMs: patchIntervalMs,
-      radius: 28,
+      radius: 250,
       patchIndex: firstBarrierIndex,
-      patchId: "patch-2",
+      patchId: "patch-1-valid",
       patchPhase: "IDLE",
       affectedChunkIds: [],
+      activePatch: null,
+      lastAppliedPatchId: null,
     },
     durationMs: config.durationMs ?? DEFAULT_MATCH_DURATION_MS,
     patchIntervalMs,
@@ -211,7 +276,13 @@ export function createGame(config: GameConfig): GameState {
     staticObstaclesByChunk,
     botRouteCache: new Map(),
     botGoalCache: new Map(),
-    pendingPatch: null,
+    pendingPatches: [],
+    appliedPatchIds: new Set(),
+    patchAcknowledgements: new Map(),
+    interventionSequence: 0,
+    lastTargetPlayerId: null,
+    rollbackCheckpoint: null,
+    cityCoreTagCount: 0,
   };
 }
 
@@ -298,7 +369,7 @@ function directionToRoadGoal(state: GameState, player: PlayerSnapshot, goal: Vec
   const cachedRoute = state.botRouteCache.get(player.id);
   const path = cachedRoute?.key === routeKey
     ? cachedRoute.path
-    : findRoadPath(ROAD_GRAPH, startNode.id, goalNode.id, state.obstacles);
+    : findRoadPath(ROAD_GRAPH, startNode.id, goalNode.id, state.obstacles, state.navigationEdges);
   if (cachedRoute?.key !== routeKey) state.botRouteCache.set(player.id, { key: routeKey, path });
   let waypoint: RoadNode | undefined;
   if (distanceBetween(player.position, startNode.position) > 3) waypoint = startNode;
@@ -404,27 +475,150 @@ function movePlayer(state: GameState, player: PlayerSnapshot, movement: Movement
   player.position = { x: appliedX, z: appliedZ };
 }
 
+function verifierContext(state: GameState): VerifierContext {
+  return {
+    world: state.world,
+    metadata: state.worldMetadata,
+    players: state.players,
+    obstacles: state.obstacles,
+    navigationEdges: state.navigationEdges,
+    currentMapVersion: state.mapVersion,
+    appliedPatchIds: state.appliedPatchIds,
+    lastTargetPlayerId: state.lastTargetPlayerId,
+  };
+}
+
+export function evaluatePatchForGame(state: GameState, patch: MapPatch): PatchEvaluation {
+  return evaluatePatch(patch, verifierContext(state));
+}
+
+function appendReplay(
+  state: GameState,
+  entry: Omit<AIReplayEntry, "sequence" | "atMs">,
+): void {
+  state.aiReplay.push({
+    ...entry,
+    sequence: state.aiReplay.length,
+    atMs: state.nowMs,
+  });
+}
+
+function upsertObstacle(state: GameState, obstacle: Obstacle): void {
+  const existing = state.obstacles.find((candidate) => candidate.id === obstacle.id);
+  if (existing === undefined) state.obstacles.push({ ...obstacle });
+  else Object.assign(existing, obstacle);
+}
+
+function upsertNavigationEdge(state: GameState, edge: NavigationEdge): void {
+  const existing = state.navigationEdges.find((candidate) => candidate.id === edge.id);
+  if (existing === undefined) state.navigationEdges.push({ ...edge });
+  else Object.assign(existing, edge);
+}
+
+function applyPatchOperations(state: GameState, patch: MapPatch): void {
+  for (const operation of patch.operations) {
+    if (operation.type === "raise_barrier") {
+      for (const obstacle of state.obstacles) {
+        if (obstacle.kind === "BARRIER") obstacle.active = false;
+      }
+    }
+    upsertObstacle(state, operation.obstacle);
+    if (operation.type !== "raise_barrier") upsertNavigationEdge(state, operation.edge);
+  }
+}
+
+function prepareNextIntervention(state: GameState): void {
+  const candidates = createFixturePatchCandidates(state.interventionSequence, verifierContext(state));
+  const decision = selectPatchCandidate(candidates, verifierContext(state));
+  const selected = decision.selected;
+  const totalLatency = decision.evaluations.reduce((total, evaluation) => total + evaluation.latencyMs, 0);
+  appendReplay(state, {
+    phase: "CANDIDATES_EVALUATED",
+    patchId: selected?.patchId ?? null,
+    selectedPatchId: selected?.patchId ?? null,
+    summary: selected === null ? "全候補をHard Constraintで拒否" : `${selected.reason}を採用`,
+    candidates: decision.evaluations,
+    latencyMs: totalLatency,
+    estimatedCostYen: decision.evaluations.reduce((total, evaluation) => total + evaluation.estimatedCostYen, 0),
+  });
+  if (selected === null) {
+    state.cityCore.patchAppliesAtMs += state.patchIntervalMs;
+    state.interventionSequence += 1;
+    state.lastEventId += 1;
+    state.lastEventText = "CITY CORE候補を全件拒否。地形を維持";
+    return;
+  }
+
+  state.pendingPatches = selected.operations.map((operation) => prepareChunkPatch(state.world, {
+    patchId: selected.patchId,
+    baseMapVersion: selected.baseMapVersion,
+    obstacle: { ...operation.obstacle },
+  }));
+  state.cityCore.activePatch = selected;
+  state.cityCore.patchId = selected.patchId;
+  state.cityCore.target = { ...selected.target };
+  state.cityCore.patchIndex = state.interventionSequence;
+  state.cityCore.patchPhase = "PREPARED";
+  state.cityCore.warningStartedAtMs = state.nowMs;
+  state.cityCore.affectedChunkIds = [
+    ...new Set(state.pendingPatches.flatMap((prepared) => prepared.affectedChunkIds)),
+  ].sort();
+  state.lastEventId += 1;
+  state.lastEventText = `CITY CORE予告: ${selected.reason} / ${selected.operations[0]?.type ?? "patch"}`;
+}
+
+function commitPreparedIntervention(state: GameState): void {
+  const patch = state.cityCore.activePatch;
+  if (patch === null || state.pendingPatches.length === 0) return;
+  const committed = state.pendingPatches.map((pending) => commitChunkPatch(pending, state.mapVersion));
+  const nextVersion = committed[0]?.committedMapVersion;
+  if (nextVersion === undefined) return;
+
+  state.rollbackCheckpoint = {
+    patchId: patch.patchId,
+    mapVersion: state.mapVersion,
+    mapChecksum: state.mapChecksum,
+    obstacles: state.obstacles.map((obstacle) => ({ ...obstacle })),
+    navigationEdges: state.navigationEdges.map((edge) => ({ ...edge })),
+    lastAppliedPatchId: state.cityCore.lastAppliedPatchId,
+  };
+  applyPatchOperations(state, patch);
+  state.mapVersion = nextVersion;
+  state.mapChecksum = computeMapChecksum(state.mapVersion, state.obstacles, state.navigationEdges);
+  state.appliedPatchIds.add(patch.patchId);
+  state.patchAcknowledgements.set(patch.patchId, new Map());
+  state.lastTargetPlayerId = patch.targetPlayerId;
+  state.cityCore.lastAppliedPatchId = patch.patchId;
+  state.botRouteCache.clear();
+  state.botGoalCache.clear();
+  appendReplay(state, {
+    phase: "PATCH_COMMITTED",
+    patchId: patch.patchId,
+    selectedPatchId: patch.patchId,
+    summary: `MapPatch v${state.mapVersion}: ${patch.operations.map((operation) => operation.type).join("+")}`,
+    candidates: [],
+    latencyMs: 1,
+    estimatedCostYen: 0,
+  });
+  state.lastEventId += 1;
+  state.lastEventText = `MapPatch v${state.mapVersion}: ${patch.operations[0]?.type ?? "patch"}をcommit`;
+  state.interventionSequence += 1;
+  state.cityCore.warningStartedAtMs = null;
+  state.cityCore.patchAppliesAtMs += state.patchIntervalMs;
+  state.cityCore.patchId = `patch-${state.interventionSequence + 1}-valid`;
+  state.cityCore.patchPhase = "IDLE";
+  state.cityCore.affectedChunkIds = [];
+  state.cityCore.activePatch = null;
+  state.pendingPatches = [];
+}
+
 function updateCityCore(state: GameState, deltaMs: number): void {
-  const warningDuration = Math.min(5_000, Math.max(1_000, state.patchIntervalMs * 0.45));
+  const warningDuration = 6_000;
   if (
     state.cityCore.warningStartedAtMs === null &&
     state.nowMs >= state.cityCore.patchAppliesAtMs - warningDuration
   ) {
-    const targetBarrier = state.obstacles.find(
-      (obstacle) => obstacle.id === `barrier-${state.cityCore.patchIndex}`,
-    );
-    if (targetBarrier !== undefined) {
-      state.pendingPatch = prepareChunkPatch(state.world, {
-        patchId: state.cityCore.patchId,
-        baseMapVersion: state.mapVersion,
-        obstacle: { ...targetBarrier, active: true },
-      });
-      state.cityCore.patchPhase = "PREPARED";
-      state.cityCore.affectedChunkIds = [...state.pendingPatch.affectedChunkIds];
-    }
-    state.cityCore.warningStartedAtMs = state.nowMs;
-    state.lastEventId += 1;
-    state.lastEventText = `CITY COREが${state.cityCore.affectedChunkIds.length}チャンクの改築を準備`;
+    prepareNextIntervention(state);
   }
 
   const targetDelta = subtract(state.cityCore.target, state.cityCore.position);
@@ -433,35 +627,50 @@ function updateCityCore(state: GameState, deltaMs: number): void {
   state.cityCore.position.x += travel.x * travelDistance;
   state.cityCore.position.z += travel.z * travelDistance;
 
-  if (state.nowMs < state.cityCore.patchAppliesAtMs) return;
+  if (state.nowMs >= state.cityCore.patchAppliesAtMs) commitPreparedIntervention(state);
+}
 
-  if (state.pendingPatch === null) return;
-  const committedPatch = commitChunkPatch(state.pendingPatch, state.mapVersion);
-  for (const obstacle of state.obstacles) {
-    if (obstacle.kind === "BARRIER") obstacle.active = false;
-  }
-  const activeBarrier = state.obstacles.find(
-    (obstacle) => obstacle.id === `barrier-${state.cityCore.patchIndex}`,
-  );
-  if (activeBarrier !== undefined) activeBarrier.active = true;
-
-  state.mapVersion = committedPatch.committedMapVersion;
+function rollbackLastPatch(state: GameState, reason: string): void {
+  const checkpoint = state.rollbackCheckpoint;
+  if (checkpoint === null) return;
+  state.mapVersion = checkpoint.mapVersion;
+  state.mapChecksum = checkpoint.mapChecksum;
+  state.obstacles = checkpoint.obstacles.map((obstacle) => ({ ...obstacle }));
+  state.navigationEdges = checkpoint.navigationEdges.map((edge) => ({ ...edge }));
+  state.cityCore.lastAppliedPatchId = checkpoint.lastAppliedPatchId;
+  state.rollbackCount += 1;
   state.botRouteCache.clear();
   state.botGoalCache.clear();
+  appendReplay(state, {
+    phase: "ROLLBACK",
+    patchId: checkpoint.patchId,
+    selectedPatchId: null,
+    summary: reason,
+    candidates: [],
+    latencyMs: 1,
+    estimatedCostYen: 0,
+  });
   state.lastEventId += 1;
-  state.lastEventText = `MapPatch v${state.mapVersion}: ${committedPatch.affectedChunkIds.length}チャンクへcommit`;
+  state.lastEventText = `ROLLBACK → v${state.mapVersion}: ${reason}`;
+  state.rollbackCheckpoint = null;
+}
 
-  const nextIndex = (state.cityCore.patchIndex + 1 + (state.seed % 2)) % BARRIER_ANCHORS.length;
-  const nextTarget = BARRIER_ANCHORS[nextIndex] ?? BARRIER_ANCHORS[0];
-  if (nextTarget === undefined) return;
-  state.cityCore.patchIndex = nextIndex;
-  state.cityCore.target = { x: nextTarget.x, z: nextTarget.z };
-  state.cityCore.warningStartedAtMs = null;
-  state.cityCore.patchAppliesAtMs += state.patchIntervalMs;
-  state.cityCore.patchId = `patch-${state.mapVersion + 1}`;
-  state.cityCore.patchPhase = "IDLE";
-  state.cityCore.affectedChunkIds = [];
-  state.pendingPatch = null;
+export function acknowledgeMapChecksum(
+  state: GameState,
+  playerId: string,
+  patchId: string,
+  mapVersion: number,
+  checksum: string,
+): boolean {
+  if (patchId !== state.cityCore.lastAppliedPatchId || mapVersion !== state.mapVersion) return false;
+  if (checksum !== state.mapChecksum) {
+    rollbackLastPatch(state, `${playerId}のchecksum不一致 (${checksum} != ${state.mapChecksum})`);
+    return false;
+  }
+  const acknowledgements = state.patchAcknowledgements.get(patchId) ?? new Map<string, string>();
+  acknowledgements.set(playerId, checksum);
+  state.patchAcknowledgements.set(patchId, acknowledgements);
+  return true;
 }
 
 function applyTag(state: GameState): void {
@@ -482,6 +691,21 @@ function applyTag(state: GameState): void {
   state.tagLockedUntilMs = state.nowMs + TAG_PROTECTION_MS;
   state.lastEventId += 1;
   state.lastEventText = `${oni.displayName} → ${target.displayName} 鬼交代`;
+  if (
+    distance(oni.position, state.cityCore.target) <= state.cityCore.radius ||
+    distance(target.position, state.cityCore.target) <= state.cityCore.radius
+  ) {
+    state.cityCoreTagCount += 1;
+    appendReplay(state, {
+      phase: "TAG_CHANGED",
+      patchId: state.cityCore.lastAppliedPatchId,
+      selectedPatchId: null,
+      summary: `CITY CORE範囲内で${target.displayName}へ鬼交代`,
+      candidates: [],
+      latencyMs: 0,
+      estimatedCostYen: 0,
+    });
+  }
 }
 
 function finishGame(state: GameState): void {
@@ -536,6 +760,11 @@ export function snapshotOf(state: GameState): MatchSnapshot {
     lastEventText: state.lastEventText,
     winnerId: state.winnerId,
     tagLockedUntilMs: state.tagLockedUntilMs,
+    stageSpec: structuredClone(state.stageSpec),
+    navigationEdges: state.navigationEdges.map((edge) => ({ ...edge })),
+    mapChecksum: state.mapChecksum,
+    rollbackCount: state.rollbackCount,
+    aiReplay: structuredClone(state.aiReplay),
     players: state.players.map((player) => ({
       ...player,
       position: { ...player.position },
@@ -547,6 +776,7 @@ export function snapshotOf(state: GameState): MatchSnapshot {
       position: { ...state.cityCore.position },
       target: { ...state.cityCore.target },
       affectedChunkIds: [...state.cityCore.affectedChunkIds],
+      activePatch: state.cityCore.activePatch === null ? null : structuredClone(state.cityCore.activePatch),
     },
   };
 }

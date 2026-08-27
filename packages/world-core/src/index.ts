@@ -1,4 +1,4 @@
-import type { Obstacle, Vec2, WorldSpec } from "@dopagaki/contracts";
+import type { NavigationEdge, Obstacle, Vec2, WorldSpec } from "@dopagaki/contracts";
 
 export interface ChunkCoordinate {
   x: number;
@@ -331,7 +331,7 @@ export function pointCollides(
   radius = 0,
 ): boolean {
   return obstacles.some((obstacle) => {
-    if (!obstacle.active) return false;
+    if (!obstacle.active || obstacle.kind === "BRIDGE") return false;
     return (
       Math.abs(position.x - obstacle.x) < obstacle.width / 2 + radius &&
       Math.abs(position.z - obstacle.z) < obstacle.depth / 2 + radius
@@ -391,6 +391,7 @@ export function findRoadPath(
   startId: string,
   goalId: string,
   obstacles: ReadonlyArray<Obstacle>,
+  navigationEdges: ReadonlyArray<NavigationEdge> = [],
 ): RoadNode[] {
   const start = graph.byId.get(startId);
   const goal = graph.byId.get(goalId);
@@ -412,7 +413,13 @@ export function findRoadPath(
     const current = graph.byId.get(currentId);
     if (current === undefined) continue;
 
-    for (const neighborId of current.neighbors) {
+    const extraNeighbors = navigationEdges.flatMap((edge) => {
+      if (!edge.active) return [];
+      if (edge.fromNodeId === current.id) return [edge.toNodeId];
+      if (edge.toNodeId === current.id) return [edge.fromNodeId];
+      return [];
+    });
+    for (const neighborId of new Set([...current.neighbors, ...extraNeighbors])) {
       const neighbor = graph.byId.get(neighborId);
       if (neighbor === undefined || edgeIsBlocked(obstacles, current.position, neighbor.position)) continue;
       const nextCost = (cost.get(currentId) ?? Number.POSITIVE_INFINITY) + distanceBetween(current.position, neighbor.position);
@@ -435,6 +442,18 @@ function reconstructPath(graph: RoadGraph, cameFrom: Map<string, string>, curren
     cursor = cameFrom.get(cursor);
   }
   return path.reverse();
+}
+
+export function roadPathDistance(path: ReadonlyArray<RoadNode>): number {
+  let total = 0;
+  for (let index = 1; index < path.length; index += 1) {
+    const previous = path[index - 1];
+    const current = path[index];
+    if (previous !== undefined && current !== undefined) {
+      total += distanceBetween(previous.position, current.position);
+    }
+  }
+  return total;
 }
 
 export function chunkIdsForBounds(
@@ -471,8 +490,8 @@ function patchChecksum(request: ChunkPatchRequest, affectedChunkIds: string[]): 
 }
 
 export function prepareChunkPatch(spec: WorldSpec, request: ChunkPatchRequest): PreparedChunkPatch {
-  if (request.obstacle.kind !== "BARRIER") {
-    throw new Error("M3 chunk patch only accepts a barrier obstacle");
+  if (!["BARRIER", "ALLEY_GATE", "BRIDGE"].includes(request.obstacle.kind)) {
+    throw new Error("MapPatch cannot mutate a protected static obstacle");
   }
   if (request.baseMapVersion < 1) throw new Error("baseMapVersion must be positive");
   const affectedChunkIds = chunkIdsForBounds(
@@ -489,6 +508,30 @@ export function prepareChunkPatch(spec: WorldSpec, request: ChunkPatchRequest): 
     affectedChunkIds,
     checksum: patchChecksum(request, affectedChunkIds),
   };
+}
+
+function fnvChecksum(canonical: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < canonical.length; index += 1) {
+    hash ^= canonical.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function computeMapChecksum(
+  mapVersion: number,
+  obstacles: ReadonlyArray<Obstacle>,
+  navigationEdges: ReadonlyArray<NavigationEdge>,
+): string {
+  const dynamicObstacles = obstacles
+    .filter((obstacle) => ["BARRIER", "ALLEY_GATE", "BRIDGE"].includes(obstacle.kind))
+    .map((obstacle) => ({ ...obstacle }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const activeEdges = navigationEdges
+    .map((edge) => ({ ...edge }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return fnvChecksum(JSON.stringify({ mapVersion, obstacles: dynamicObstacles, navigationEdges: activeEdges }));
 }
 
 export function commitChunkPatch(

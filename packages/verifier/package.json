@@ -1,12 +1,11 @@
 {
-  "name": "@dopagaki/game-core",
+  "name": "@dopagaki/verifier",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
     "@dopagaki/contracts": "*",
-    "@dopagaki/verifier": "*",
     "@dopagaki/world-core": "*"
   }
 }
