@@ -22,6 +22,10 @@ import { WebSocket, WebSocketServer } from "ws";
 const PORT = Number.parseInt(process.env.PORT ?? "3001", 10);
 const MATCH_DURATION_MS = Number.parseInt(process.env.MATCH_DURATION_MS ?? "600000", 10);
 const PATCH_INTERVAL_MS = Number.parseInt(process.env.PATCH_INTERVAL_MS ?? "20000", 10);
+const configuredHumanSpeedMultiplier = Number.parseFloat(process.env.HUMAN_SPEED_MULTIPLIER ?? "1");
+const HUMAN_SPEED_MULTIPLIER = Number.isFinite(configuredHumanSpeedMultiplier) && configuredHumanSpeedMultiplier > 0
+  ? configuredHumanSpeedMultiplier
+  : 1;
 const TICK_MS = 50;
 const SNAPSHOT_MS = 100;
 const INITIAL_SEED = Number.parseInt(process.env.MATCH_SEED ?? "20260827", 10);
@@ -42,6 +46,7 @@ function newGame(nextSeed: number): GameState {
     seed: nextSeed,
     durationMs: MATCH_DURATION_MS,
     patchIntervalMs: PATCH_INTERVAL_MS,
+    humanSpeedMultiplier: HUMAN_SPEED_MULTIPLIER,
   });
 }
 

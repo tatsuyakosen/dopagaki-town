@@ -84,10 +84,13 @@ describe("authoritative tag rules", () => {
     startGame(game);
     while (game.nowMs < 1_950) stepGame(game, {}, 50);
     expect(game.cityCore.warningStartedAtMs).not.toBeNull();
+    expect(game.cityCore.patchPhase).toBe("PREPARED");
+    expect(game.cityCore.affectedChunkIds).toHaveLength(2);
     expect(game.obstacles.filter((obstacle) => obstacle.kind === "BARRIER" && obstacle.active)).toHaveLength(0);
 
     stepGame(game, {}, 50);
     expect(game.mapVersion).toBe(2);
+    expect(game.cityCore.patchPhase).toBe("IDLE");
     expect(game.obstacles.filter((obstacle) => obstacle.kind === "BARRIER" && obstacle.active)).toHaveLength(1);
   });
 });

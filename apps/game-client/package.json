@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@babylonjs/core": "^9.22.2",
-    "@dopagaki/contracts": "*"
+    "@dopagaki/contracts": "*",
+    "@dopagaki/world-core": "*"
   }
 }

@@ -8,14 +8,21 @@ import type {
 } from "@dopagaki/contracts";
 import {
   DEFAULT_WORLD_SPEC,
+  chunkAtPosition,
+  chunkId,
+  commitChunkPatch,
   createCityObstacles,
   createRoadGraph,
+  createWorldMetadata,
   distanceBetween,
   findRoadPath,
   nearestRoadNode,
   pointCollides,
+  prepareChunkPatch,
   segmentIsClear,
+  type PreparedChunkPatch,
   type RoadNode,
+  type WorldMetadata,
 } from "@dopagaki/world-core";
 
 export const WORLD_HALF_SIZE = DEFAULT_WORLD_SPEC.halfSize;
@@ -33,11 +40,19 @@ export interface GameConfig {
   seed: number;
   durationMs?: number;
   patchIntervalMs?: number;
+  humanSpeedMultiplier?: number;
 }
 
 export interface GameState extends MatchSnapshot {
   durationMs: number;
   patchIntervalMs: number;
+  humanSpeedMultiplier: number;
+  worldMetadata: WorldMetadata;
+  worldObstacles: Obstacle[];
+  staticObstaclesByChunk: Map<string, Obstacle[]>;
+  botRouteCache: Map<string, { key: string; path: RoadNode[] }>;
+  botGoalCache: Map<string, { expiresAtMs: number; goal: Vec2 }>;
+  pendingPatch: PreparedChunkPatch | null;
 }
 
 type Inputs = Readonly<Record<string, Movement | undefined>>;
@@ -125,6 +140,15 @@ function spawnPlayer(
 
 export function createGame(config: GameConfig): GameState {
   const random = new SeededRandom(config.seed);
+  const worldMetadata = createWorldMetadata(DEFAULT_WORLD_SPEC, config.seed);
+  const worldObstacles = createCityObstacles(DEFAULT_WORLD_SPEC, config.seed);
+  const staticObstaclesByChunk = new Map<string, Obstacle[]>();
+  for (const obstacle of worldObstacles) {
+    const id = chunkId(chunkAtPosition(DEFAULT_WORLD_SPEC, obstacle));
+    const chunkObstacles = staticObstaclesByChunk.get(id) ?? [];
+    chunkObstacles.push(obstacle);
+    staticObstaclesByChunk.set(id, chunkObstacles);
+  }
   const oniIndex = Math.floor(random.next() * 4);
   const spawns: Vec2[] = [
     { x: -34, z: 0 },
@@ -167,10 +191,7 @@ export function createGame(config: GameConfig): GameState {
     winnerId: null,
     tagLockedUntilMs: 0,
     players,
-    obstacles: [
-      ...createCityObstacles(DEFAULT_WORLD_SPEC, config.seed),
-      ...BARRIER_ANCHORS.map((barrier) => ({ ...barrier })),
-    ],
+    obstacles: BARRIER_ANCHORS.map((barrier) => ({ ...barrier })),
     cityCore: {
       position: { x: 0, z: 0 },
       target: { x: firstTarget.x, z: firstTarget.z },
@@ -178,9 +199,19 @@ export function createGame(config: GameConfig): GameState {
       patchAppliesAtMs: patchIntervalMs,
       radius: 28,
       patchIndex: firstBarrierIndex,
+      patchId: "patch-2",
+      patchPhase: "IDLE",
+      affectedChunkIds: [],
     },
     durationMs: config.durationMs ?? DEFAULT_MATCH_DURATION_MS,
     patchIntervalMs,
+    humanSpeedMultiplier: config.humanSpeedMultiplier ?? 1,
+    worldMetadata,
+    worldObstacles,
+    staticObstaclesByChunk,
+    botRouteCache: new Map(),
+    botGoalCache: new Map(),
+    pendingPatch: null,
   };
 }
 
@@ -263,7 +294,12 @@ function directionToRoadGoal(state: GameState, player: PlayerSnapshot, goal: Vec
 
   const startNode = nearestRoadNode(ROAD_GRAPH, player.position);
   const goalNode = nearestRoadNode(ROAD_GRAPH, goal);
-  const path = findRoadPath(ROAD_GRAPH, startNode.id, goalNode.id, state.obstacles);
+  const routeKey = `${startNode.id}>${goalNode.id}@${state.mapVersion}`;
+  const cachedRoute = state.botRouteCache.get(player.id);
+  const path = cachedRoute?.key === routeKey
+    ? cachedRoute.path
+    : findRoadPath(ROAD_GRAPH, startNode.id, goalNode.id, state.obstacles);
+  if (cachedRoute?.key !== routeKey) state.botRouteCache.set(player.id, { key: routeKey, path });
   let waypoint: RoadNode | undefined;
   if (distanceBetween(player.position, startNode.position) > 3) waypoint = startNode;
   else waypoint = path[1] ?? path[0];
@@ -280,7 +316,7 @@ function runnerRoadGoal(state: GameState, player: PlayerSnapshot, oni: PlayerSna
     return state.cityCore.target;
   }
   if (player.strategy === "RAIL") {
-    return player.position.z <= 0 ? { x: 0, z: 200 } : { x: 0, z: -200 };
+    return player.position.z <= 0 ? { x: 0, z: 2_250 } : { x: 0, z: -2_250 };
   }
 
   const idBias = [...player.id].reduce((sum, character) => sum + character.charCodeAt(0), 0) % 7;
@@ -313,18 +349,34 @@ function botMovement(state: GameState, player: PlayerSnapshot): Movement {
     return { ...direction, sprint: false };
   }
 
-  const goal = runnerRoadGoal(state, player, oni);
+  const cachedGoal = state.botGoalCache.get(player.id);
+  const goal = cachedGoal !== undefined && cachedGoal.expiresAtMs > state.nowMs
+    ? cachedGoal.goal
+    : runnerRoadGoal(state, player, oni);
+  if (cachedGoal === undefined || cachedGoal.expiresAtMs <= state.nowMs) {
+    state.botGoalCache.set(player.id, {
+      expiresAtMs: state.nowMs + 5_000,
+      goal: { ...goal },
+    });
+  }
   return { ...directionToRoadGoal(state, player, goal), sprint: false };
 }
 
 function collides(state: GameState, x: number, z: number): boolean {
-  return pointCollides(state.obstacles, { x, z }, PLAYER_RADIUS);
+  const position = { x, z };
+  const localChunkId = chunkId(chunkAtPosition(state.world, position));
+  const staticObstacles = state.staticObstaclesByChunk.get(localChunkId) ?? [];
+  return (
+    pointCollides(staticObstacles, position, PLAYER_RADIUS) ||
+    pointCollides(state.obstacles, position, PLAYER_RADIUS)
+  );
 }
 
 function movePlayer(state: GameState, player: PlayerSnapshot, movement: Movement, deltaMs: number): void {
   const direction = normalized(movement);
   const baseSpeed = player.kind === "HUMAN" ? HUMAN_SPEED : BOT_SPEED;
-  const speed = baseSpeed * (movement.sprint && player.kind === "HUMAN" ? 1.12 : 1);
+  const humanMultiplier = player.kind === "HUMAN" ? state.humanSpeedMultiplier : 1;
+  const speed = baseSpeed * humanMultiplier * (movement.sprint && player.kind === "HUMAN" ? 1.12 : 1);
   const seconds = deltaMs / 1_000;
   const dx = direction.x * speed * seconds;
   const dz = direction.z * speed * seconds;
@@ -337,7 +389,8 @@ function movePlayer(state: GameState, player: PlayerSnapshot, movement: Movement
   if (!collides(state, nextX, player.position.z)) appliedX = nextX;
   if (!collides(state, appliedX, nextZ)) appliedZ = nextZ;
 
-  if (appliedX === player.position.x && appliedZ === player.position.z && (dx !== 0 || dz !== 0)) {
+  const hasReachableDisplacement = nextX !== player.position.x || nextZ !== player.position.z;
+  if (appliedX === player.position.x && appliedZ === player.position.z && hasReachableDisplacement) {
     const sidestepX = Math.max(-worldLimit, Math.min(worldLimit, player.position.x - dz));
     const sidestepZ = Math.max(-worldLimit, Math.min(worldLimit, player.position.z + dx));
     if (!collides(state, sidestepX, player.position.z)) appliedX = sidestepX;
@@ -357,9 +410,21 @@ function updateCityCore(state: GameState, deltaMs: number): void {
     state.cityCore.warningStartedAtMs === null &&
     state.nowMs >= state.cityCore.patchAppliesAtMs - warningDuration
   ) {
+    const targetBarrier = state.obstacles.find(
+      (obstacle) => obstacle.id === `barrier-${state.cityCore.patchIndex}`,
+    );
+    if (targetBarrier !== undefined) {
+      state.pendingPatch = prepareChunkPatch(state.world, {
+        patchId: state.cityCore.patchId,
+        baseMapVersion: state.mapVersion,
+        obstacle: { ...targetBarrier, active: true },
+      });
+      state.cityCore.patchPhase = "PREPARED";
+      state.cityCore.affectedChunkIds = [...state.pendingPatch.affectedChunkIds];
+    }
     state.cityCore.warningStartedAtMs = state.nowMs;
     state.lastEventId += 1;
-    state.lastEventText = "CITY COREが道路改築を予告";
+    state.lastEventText = `CITY COREが${state.cityCore.affectedChunkIds.length}チャンクの改築を準備`;
   }
 
   const targetDelta = subtract(state.cityCore.target, state.cityCore.position);
@@ -370,6 +435,8 @@ function updateCityCore(state: GameState, deltaMs: number): void {
 
   if (state.nowMs < state.cityCore.patchAppliesAtMs) return;
 
+  if (state.pendingPatch === null) return;
+  const committedPatch = commitChunkPatch(state.pendingPatch, state.mapVersion);
   for (const obstacle of state.obstacles) {
     if (obstacle.kind === "BARRIER") obstacle.active = false;
   }
@@ -378,9 +445,11 @@ function updateCityCore(state: GameState, deltaMs: number): void {
   );
   if (activeBarrier !== undefined) activeBarrier.active = true;
 
-  state.mapVersion += 1;
+  state.mapVersion = committedPatch.committedMapVersion;
+  state.botRouteCache.clear();
+  state.botGoalCache.clear();
   state.lastEventId += 1;
-  state.lastEventText = `MapPatch v${state.mapVersion}: 道路隆起を適用`;
+  state.lastEventText = `MapPatch v${state.mapVersion}: ${committedPatch.affectedChunkIds.length}チャンクへcommit`;
 
   const nextIndex = (state.cityCore.patchIndex + 1 + (state.seed % 2)) % BARRIER_ANCHORS.length;
   const nextTarget = BARRIER_ANCHORS[nextIndex] ?? BARRIER_ANCHORS[0];
@@ -389,6 +458,10 @@ function updateCityCore(state: GameState, deltaMs: number): void {
   state.cityCore.target = { x: nextTarget.x, z: nextTarget.z };
   state.cityCore.warningStartedAtMs = null;
   state.cityCore.patchAppliesAtMs += state.patchIntervalMs;
+  state.cityCore.patchId = `patch-${state.mapVersion + 1}`;
+  state.cityCore.patchPhase = "IDLE";
+  state.cityCore.affectedChunkIds = [];
+  state.pendingPatch = null;
 }
 
 function applyTag(state: GameState): void {
@@ -473,6 +546,7 @@ export function snapshotOf(state: GameState): MatchSnapshot {
       ...state.cityCore,
       position: { ...state.cityCore.position },
       target: { ...state.cityCore.target },
+      affectedChunkIds: [...state.cityCore.affectedChunkIds],
     },
   };
 }

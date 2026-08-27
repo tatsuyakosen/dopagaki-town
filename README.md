@@ -2,7 +2,9 @@
 
 PLAYER vs PLAYER vs CITY — 街そのものが試合へ介入する、ローカルファーストのマルチプレイヤー鬼ごっこです。
 
-現在のM2縦切りでは、500m×500mの3×3低ポリ街区へブラウザから1人で入場するとRival Botが3体補充されます。Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確定し、CITY COREは予告隆起後に道路障害物を切り替えます。Botは5×5交差点の道路グラフをA*で移動し、改築後は閉鎖edgeを避けて再経路選択します。
+現在のM3縦切りでは、5km×5kmを250m角の400論理チャンクとして構成します。クライアントは進行方向の5×5を先読みし、3×3だけを低ポリ建物・簡略Colliderのactive範囲として実体化します。後方チャンクは破棄され、遠方参加者は441 nodeの広域道路グラフ上だけで更新されます。
+
+Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確定し、CITY COREの境界改築は対象チャンクをprepareしてから一括commitします。外部サービスや秘密情報は使いません。
 
 ## 必要環境
 
@@ -11,6 +13,8 @@ PLAYER vs PLAYER vs CITY — 街そのものが試合へ介入する、ローカ
 - PCブラウザ（Chrome推奨）
 
 外部APIキー、Docker、Google Cloud、Firestore Emulatorは不要です。
+
+環境変数はすべて任意です。未設定時はMatch Serverのポート、固定Seed、10分試合、CITY CORE間隔、LOW描画倍率にコード内の既定値が使われます。上書き例は `.env.example` にあります。
 
 ## 起動
 
@@ -45,10 +49,10 @@ npm run test:e2e
 npm run verify:local
 ```
 
-500m LOWプリセットを実時間10分間動かすM2 soak:
+5km streamingを実時間10分間動かすM3 soak:
 
 ```bash
-npm run test:soak:m2
+npm run test:soak:m3
 ```
 
 E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動し、システムのGoogle ChromeをHeadlessで操作します。
@@ -60,8 +64,9 @@ apps/game-client       Babylon.jsによる低ポリ都市とHUD
 apps/match-server      authoritative WebSocket Match Server
 packages/contracts     ZodによるRuntime Schema
 packages/game-core     決定論的なゲームルールとBot
+packages/world-core    400チャンク、広域道路グラフ、streaming、Patch commit
 tests/e2e              ブラウザ操作の受入テスト
-tests/soak             500m街区の実時間10分性能試験
+tests/soak             5km streamingの実時間10分性能試験
 ```
 
 ローカルMVPを外部サービスから独立させるため、AI、鉄道、永続化は今後adapterとして追加します。

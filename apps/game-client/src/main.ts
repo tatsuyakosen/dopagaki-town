@@ -21,6 +21,16 @@ import {
   type PlayerSnapshot,
   type WorldSpec,
 } from "@dopagaki/contracts";
+import {
+  DEFAULT_WORLD_SPEC,
+  calculateChunkWindow,
+  chunkAtPosition,
+  chunkId,
+  createChunkObstacles,
+  createWorldMetadata,
+  type ChunkMetadata,
+  type WorldMetadata,
+} from "@dopagaki/world-core";
 import "./style.css";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#renderCanvas");
@@ -76,7 +86,7 @@ followCamera.heightOffset = 12;
 followCamera.rotationOffset = 180;
 followCamera.cameraAcceleration = 0.08;
 followCamera.maxCameraSpeed = 16;
-followCamera.maxZ = 850;
+followCamera.maxZ = 6_000;
 scene.activeCamera = overviewCamera;
 
 const ambient = new HemisphericLight("ambient", new Vector3(0, 1, 0), scene);
@@ -97,18 +107,6 @@ function material(name: string, diffuse: string, emissive?: string): StandardMat
 
 const groundMaterial = material("asphalt", "#0d2929");
 groundMaterial.roughness = 1;
-const ground = MeshBuilder.CreateGround("ground", { width: 500, height: 500 }, scene);
-ground.material = groundMaterial;
-
-const PREVIEW_WORLD: WorldSpec = {
-  sizeMeters: 500,
-  halfSize: 250,
-  chunksPerAxis: 3,
-  chunkSizeMeters: 500 / 3,
-  activeChunkRadius: 1,
-  roadOffsets: [-200, -100, 0, 100, 200],
-  roadWidth: 18,
-};
 const roadMaterial = material("road", "#173839");
 const markingMaterial = material("marking", "#a9cbb8", "#183c34");
 const alleyMaterial = material("alley", "#112f30");
@@ -133,8 +131,10 @@ function placeBoxInstance(
   width: number,
   height: number,
   depth: number,
+  parent?: TransformNode,
 ): AbstractMesh {
   const instance = master.createInstance(name);
+  if (parent !== undefined) instance.parent = parent;
   instance.position.set(x, y, z);
   instance.scaling.set(width, height, depth);
   instance.isPickable = false;
@@ -142,71 +142,26 @@ function placeBoxInstance(
   return instance;
 }
 
-function buildRoadPrefabs(world: WorldSpec): void {
-  const roadMaster = createUnitBox("road-prefab", roadMaterial);
-  const markingMaster = createUnitBox("marking-prefab", markingMaterial);
-  const alleyMaster = createUnitBox("alley-prefab", alleyMaterial);
-  const chunkMaster = createUnitBox("chunk-border-prefab", chunkMaterial);
-  const poleMaster = MeshBuilder.CreateCylinder("streetlight-pole-prefab", { height: 1, diameter: 1, tessellation: 6 }, scene);
-  poleMaster.material = poleMaterial;
-  poleMaster.position.y = -1_000;
-  const lampMaster = MeshBuilder.CreateSphere("streetlight-lamp-prefab", { diameter: 1, segments: 4 }, scene);
-  lampMaster.material = lampMaterial;
-  lampMaster.position.y = -1_000;
+const groundMaster = createUnitBox("ground-prefab", groundMaterial);
+const roadMaster = createUnitBox("road-prefab", roadMaterial);
+const markingMaster = createUnitBox("marking-prefab", markingMaterial);
+const alleyMaster = createUnitBox("alley-prefab", alleyMaterial);
+const chunkBorderMaster = createUnitBox("chunk-border-prefab", chunkMaterial);
+const poleMaster = MeshBuilder.CreateCylinder(
+  "streetlight-pole-prefab",
+  { height: 1, diameter: 1, tessellation: 6 },
+  scene,
+);
+poleMaster.material = poleMaterial;
+poleMaster.position.y = -1_000;
+const lampMaster = MeshBuilder.CreateSphere(
+  "streetlight-lamp-prefab",
+  { diameter: 1, segments: 4 },
+  scene,
+);
+lampMaster.material = lampMaterial;
+lampMaster.position.y = -1_000;
 
-  for (const offset of world.roadOffsets) {
-    placeBoxInstance(roadMaster, `road-v-${offset}`, offset, 0.04, 0, world.roadWidth, 0.08, world.sizeMeters);
-    placeBoxInstance(roadMaster, `road-h-${offset}`, 0, 0.045, offset, world.sizeMeters, 0.09, world.roadWidth);
-    for (let line = -world.halfSize + 16; line <= world.halfSize - 16; line += 40) {
-      placeBoxInstance(markingMaster, `vm-${offset}-${line}`, offset, 0.1, line, 0.18, 0.02, 7.2);
-      placeBoxInstance(markingMaster, `hm-${offset}-${line}`, line, 0.105, offset, 7.2, 0.02, 0.18);
-    }
-    if (Math.abs(offset) === 100) continue;
-    for (let light = -200; light <= 200; light += 100) {
-      const verticalPole = poleMaster.createInstance(`pole-v-${offset}-${light}`);
-      verticalPole.position.set(offset + world.roadWidth / 2 + 2.5, 2.7, light);
-      verticalPole.scaling.set(0.24, 5.4, 0.24);
-      verticalPole.freezeWorldMatrix();
-      const verticalLamp = lampMaster.createInstance(`lamp-v-${offset}-${light}`);
-      verticalLamp.position.set(offset + world.roadWidth / 2 + 2.5, 5.5, light);
-      verticalLamp.scaling.setAll(0.65);
-      verticalLamp.freezeWorldMatrix();
-
-      const horizontalPole = poleMaster.createInstance(`pole-h-${offset}-${light}`);
-      horizontalPole.position.set(light, 2.7, offset + world.roadWidth / 2 + 2.5);
-      horizontalPole.scaling.set(0.24, 5.4, 0.24);
-      horizontalPole.freezeWorldMatrix();
-      const horizontalLamp = lampMaster.createInstance(`lamp-h-${offset}-${light}`);
-      horizontalLamp.position.set(light, 5.5, offset + world.roadWidth / 2 + 2.5);
-      horizontalLamp.scaling.setAll(0.65);
-      horizontalLamp.freezeWorldMatrix();
-    }
-  }
-
-  for (let index = 0; index < world.roadOffsets.length - 1; index += 1) {
-    const left = world.roadOffsets[index];
-    const right = world.roadOffsets[index + 1];
-    if (left === undefined || right === undefined) continue;
-    const center = (left + right) / 2;
-    const span = right - left - world.roadWidth;
-    for (let cross = 0; cross < world.roadOffsets.length - 1; cross += 1) {
-      const top = world.roadOffsets[cross];
-      const bottom = world.roadOffsets[cross + 1];
-      if (top === undefined || bottom === undefined) continue;
-      const crossCenter = (top + bottom) / 2;
-      placeBoxInstance(alleyMaster, `alley-v-${index}-${cross}`, center, 0.055, crossCenter, 8, 0.05, span);
-      placeBoxInstance(alleyMaster, `alley-h-${index}-${cross}`, center, 0.06, crossCenter, span, 0.05, 8);
-    }
-  }
-
-  for (let index = 1; index < world.chunksPerAxis; index += 1) {
-    const offset = -world.halfSize + world.chunkSizeMeters * index;
-    placeBoxInstance(chunkMaster, `chunk-v-${index}`, offset, 0.14, 0, 0.22, 0.03, world.sizeMeters);
-    placeBoxInstance(chunkMaster, `chunk-h-${index}`, 0, 0.14, offset, world.sizeMeters, 0.03, 0.22);
-  }
-}
-
-buildRoadPrefabs(PREVIEW_WORLD);
 [groundMaterial, roadMaterial, markingMaterial, alleyMaterial, chunkMaterial, poleMaterial, lampMaterial].forEach(
   (value) => value.freeze(),
 );
@@ -262,46 +217,197 @@ function hashName(value: string): number {
   return [...value].reduce((hash, char) => hash + char.charCodeAt(0), 0);
 }
 
-function syncObstacle(obstacle: Obstacle): void {
+function createObstacleVisual(obstacle: Obstacle, parent?: TransformNode): AbstractMesh {
+  let mesh: AbstractMesh;
+  if (obstacle.kind === "BUILDING") {
+    const master = buildingMasters[hashName(obstacle.id) % buildingMasters.length] ?? buildingMasters[0];
+    if (master === undefined) throw new Error("At least one building prefab is required");
+    mesh = master.createInstance(obstacle.id);
+    mesh.scaling.set(obstacle.width, obstacle.height, obstacle.depth);
+    mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
+    if (parent !== undefined) mesh.parent = parent;
+    mesh.freezeWorldMatrix();
+    if (hashName(obstacle.id) % 4 === 0) {
+      const roof = roofMaster.createInstance(`${obstacle.id}-roof`);
+      roof.scaling.set(obstacle.width * 0.72, 0.7, obstacle.depth * 0.72);
+      roof.position.set(obstacle.x, obstacle.height + 0.35, obstacle.z);
+      if (parent !== undefined) roof.parent = parent;
+      roof.freezeWorldMatrix();
+    }
+  } else if (obstacle.kind === "STATION") {
+    mesh = stationMaster.createInstance(obstacle.id);
+    mesh.scaling.set(obstacle.width, obstacle.height, obstacle.depth);
+    mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
+    if (parent !== undefined) mesh.parent = parent;
+    mesh.freezeWorldMatrix();
+    const canopy = roofMaster.createInstance(`${obstacle.id}-canopy`);
+    canopy.scaling.set(obstacle.width * 1.18, 0.5, obstacle.depth * 1.45);
+    canopy.position.set(obstacle.x, obstacle.height + 0.25, obstacle.z);
+    if (parent !== undefined) canopy.parent = parent;
+    canopy.freezeWorldMatrix();
+  } else {
+    mesh = MeshBuilder.CreateBox(
+      obstacle.id,
+      { width: obstacle.width, depth: obstacle.depth, height: obstacle.height },
+      scene,
+    );
+    mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
+    mesh.material = barrierMaterial;
+    if (parent !== undefined) mesh.parent = parent;
+    mesh.freezeWorldMatrix();
+  }
+  return mesh;
+}
+
+function syncObstacle(obstacle: Obstacle, shouldRender = true): void {
   let mesh = obstacleVisuals.get(obstacle.id);
   if (mesh === undefined) {
-    if (obstacle.kind === "BUILDING") {
-      const master = buildingMasters[hashName(obstacle.id) % buildingMasters.length] ?? buildingMasters[0];
-      if (master === undefined) throw new Error("At least one building prefab is required");
-      mesh = master.createInstance(obstacle.id);
-      mesh.scaling.set(obstacle.width, obstacle.height, obstacle.depth);
-      mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
-      mesh.freezeWorldMatrix();
-      if (hashName(obstacle.id) % 4 === 0) {
-        const roof = roofMaster.createInstance(`${obstacle.id}-roof`);
-        roof.scaling.set(obstacle.width * 0.72, 0.7, obstacle.depth * 0.72);
-        roof.position.set(obstacle.x, obstacle.height + 0.35, obstacle.z);
-        roof.freezeWorldMatrix();
-      }
-    } else if (obstacle.kind === "STATION") {
-      mesh = stationMaster.createInstance(obstacle.id);
-      mesh.scaling.set(obstacle.width, obstacle.height, obstacle.depth);
-      mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
-      mesh.freezeWorldMatrix();
-      const canopy = roofMaster.createInstance(`${obstacle.id}-canopy`);
-      canopy.scaling.set(obstacle.width * 1.18, 0.5, obstacle.depth * 1.45);
-      canopy.position.set(obstacle.x, obstacle.height + 0.25, obstacle.z);
-      canopy.freezeWorldMatrix();
-    } else {
-      mesh = MeshBuilder.CreateBox(
-        obstacle.id,
-        { width: obstacle.width, depth: obstacle.depth, height: obstacle.height },
-        scene,
-      );
-      mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
-      mesh.material = barrierMaterial;
-      mesh.freezeWorldMatrix();
-    }
+    mesh = createObstacleVisual(obstacle);
     obstacleVisuals.set(obstacle.id, mesh);
   }
-  if (obstacleActiveStates.get(obstacle.id) === obstacle.active) return;
-  obstacleActiveStates.set(obstacle.id, obstacle.active);
-  mesh.setEnabled(obstacle.active);
+  const enabled = obstacle.active && shouldRender;
+  if (obstacleActiveStates.get(obstacle.id) === enabled) return;
+  obstacleActiveStates.set(obstacle.id, enabled);
+  mesh.setEnabled(enabled);
+}
+
+interface ChunkVisual {
+  root: TransformNode;
+  detailRoot: TransformNode | null;
+  active: boolean;
+}
+
+const chunkVisuals = new Map<string, ChunkVisual>();
+let worldMetadata: WorldMetadata | null = null;
+let worldMetadataById = new Map<string, ChunkMetadata>();
+let worldMetadataKey = "";
+let activeChunkIds = new Set<string>();
+let preloadedChunkIds = new Set<string>();
+let navigationUpdateMs = 0;
+
+function createPreloadedChunk(metadata: ChunkMetadata, world: WorldSpec): ChunkVisual {
+  const root = new TransformNode(`preload-${metadata.id}`, scene);
+  const half = world.chunkSizeMeters / 2;
+  const left = metadata.center.x - half;
+  const right = metadata.center.x + half;
+  const top = metadata.center.z - half;
+  const bottom = metadata.center.z + half;
+  const halfRoad = world.roadWidth / 2;
+
+  placeBoxInstance(
+    groundMaster,
+    `${metadata.id}-ground`,
+    metadata.center.x,
+    -0.02,
+    metadata.center.z,
+    world.chunkSizeMeters,
+    0.04,
+    world.chunkSizeMeters,
+    root,
+  );
+  placeBoxInstance(roadMaster, `${metadata.id}-road-l`, left + halfRoad / 2, 0.04, metadata.center.z, halfRoad, 0.08, world.chunkSizeMeters, root);
+  placeBoxInstance(roadMaster, `${metadata.id}-road-r`, right - halfRoad / 2, 0.04, metadata.center.z, halfRoad, 0.08, world.chunkSizeMeters, root);
+  placeBoxInstance(roadMaster, `${metadata.id}-road-t`, metadata.center.x, 0.045, top + halfRoad / 2, world.chunkSizeMeters, 0.09, halfRoad, root);
+  placeBoxInstance(roadMaster, `${metadata.id}-road-b`, metadata.center.x, 0.045, bottom - halfRoad / 2, world.chunkSizeMeters, 0.09, halfRoad, root);
+  placeBoxInstance(markingMaster, `${metadata.id}-mark-l`, left + halfRoad / 2, 0.1, metadata.center.z, 0.18, 0.02, world.chunkSizeMeters - 20, root);
+  placeBoxInstance(markingMaster, `${metadata.id}-mark-t`, metadata.center.x, 0.105, top + halfRoad / 2, world.chunkSizeMeters - 20, 0.02, 0.18, root);
+  placeBoxInstance(chunkBorderMaster, `${metadata.id}-border-x`, metadata.center.x, 0.14, top, world.chunkSizeMeters, 0.03, 0.18, root);
+  placeBoxInstance(chunkBorderMaster, `${metadata.id}-border-z`, left, 0.14, metadata.center.z, 0.18, 0.03, world.chunkSizeMeters, root);
+  return { root, detailRoot: null, active: false };
+}
+
+function setChunkActive(
+  visual: ChunkVisual,
+  metadata: ChunkMetadata,
+  world: WorldSpec,
+  seed: number,
+  active: boolean,
+): void {
+  if (visual.active === active) return;
+  visual.active = active;
+  if (!active) {
+    visual.detailRoot?.dispose();
+    visual.detailRoot = null;
+    return;
+  }
+
+  const detailRoot = new TransformNode(`active-${metadata.id}`, scene);
+  detailRoot.parent = visual.root;
+  visual.detailRoot = detailRoot;
+  for (const obstacle of createChunkObstacles(world, seed, metadata)) {
+    createObstacleVisual(obstacle, detailRoot);
+  }
+  const alleySpan = world.chunkSizeMeters - world.roadWidth - 10;
+  placeBoxInstance(alleyMaster, `${metadata.id}-alley-v`, metadata.center.x, 0.055, metadata.center.z, 8, 0.05, alleySpan, detailRoot);
+  placeBoxInstance(alleyMaster, `${metadata.id}-alley-h`, metadata.center.x, 0.06, metadata.center.z, alleySpan, 0.05, 8, detailRoot);
+
+  const lightOffset = world.chunkSizeMeters / 2 - world.roadWidth - 3;
+  for (const [suffix, x, z] of [
+    ["nw", metadata.center.x - lightOffset, metadata.center.z - lightOffset],
+    ["se", metadata.center.x + lightOffset, metadata.center.z + lightOffset],
+  ] as const) {
+    const pole = poleMaster.createInstance(`${metadata.id}-pole-${suffix}`);
+    pole.parent = detailRoot;
+    pole.position.set(x, 2.7, z);
+    pole.scaling.set(0.24, 5.4, 0.24);
+    pole.freezeWorldMatrix();
+    const lamp = lampMaster.createInstance(`${metadata.id}-lamp-${suffix}`);
+    lamp.parent = detailRoot;
+    lamp.position.set(x, 5.5, z);
+    lamp.scaling.setAll(0.65);
+    lamp.freezeWorldMatrix();
+  }
+}
+
+function resetStreamedWorld(): void {
+  for (const visual of chunkVisuals.values()) visual.root.dispose();
+  chunkVisuals.clear();
+  worldMetadataById.clear();
+  activeChunkIds.clear();
+  preloadedChunkIds.clear();
+}
+
+function syncStreamedWorld(
+  world: WorldSpec,
+  seed: number,
+  player: Pick<PlayerSnapshot, "position" | "velocity">,
+): void {
+  const startedAt = performance.now();
+  const metadataKey = `${seed}:${world.sizeMeters}:${world.chunksPerAxis}:${world.chunkSizeMeters}`;
+  if (metadataKey !== worldMetadataKey) {
+    resetStreamedWorld();
+    worldMetadata = createWorldMetadata(world, seed);
+    worldMetadataById = new Map(worldMetadata.chunks.map((chunk) => [chunk.id, chunk]));
+    worldMetadataKey = metadataKey;
+  }
+  if (worldMetadata === null) return;
+
+  const window = calculateChunkWindow(world, player.position, player.velocity);
+  const nextActiveIds = new Set(window.activeIds);
+  const nextPreloadedIds = new Set(window.preloadIds);
+  for (const [id, visual] of chunkVisuals) {
+    if (nextPreloadedIds.has(id)) continue;
+    visual.root.dispose();
+    chunkVisuals.delete(id);
+  }
+  for (const id of nextPreloadedIds) {
+    const metadata = worldMetadataById.get(id);
+    if (metadata === undefined) continue;
+    const visual = chunkVisuals.get(id) ?? createPreloadedChunk(metadata, world);
+    chunkVisuals.set(id, visual);
+    setChunkActive(visual, metadata, world, seed, nextActiveIds.has(id));
+  }
+  activeChunkIds = nextActiveIds;
+  preloadedChunkIds = nextPreloadedIds;
+  navigationUpdateMs = performance.now() - startedAt;
+
+  document.body.dataset.activeChunks = String(activeChunkIds.size);
+  document.body.dataset.preloadedChunks = String(preloadedChunkIds.size);
+  document.body.dataset.loadedChunks = String(chunkVisuals.size);
+  document.body.dataset.worldChunks = String(worldMetadata.chunks.length);
+  document.body.dataset.chunkFocus = `${window.focus.x},${window.focus.z}`;
+  document.body.dataset.navigationMode = "GRAPH_COLLIDER";
+  document.body.dataset.navmeshMs = navigationUpdateMs.toFixed(3);
 }
 
 function createPlayerVisual(player: PlayerSnapshot): PlayerVisual {
@@ -326,7 +432,13 @@ function createPlayerVisual(player: PlayerSnapshot): PlayerVisual {
   return visual;
 }
 
-function syncPlayer(player: PlayerSnapshot): void {
+function syncPlayer(player: PlayerSnapshot, shouldRender: boolean): void {
+  if (!shouldRender) {
+    const existing = playerVisuals.get(player.id);
+    existing?.root.dispose();
+    playerVisuals.delete(player.id);
+    return;
+  }
   const visual = playerVisuals.get(player.id) ?? createPlayerVisual(player);
   visual.target.set(player.position.x, 0, player.position.z);
   visual.body.material = player.role === "ONI" ? oniMaterial : player.id === localPlayerId ? localMaterial : runnerMaterial;
@@ -434,15 +546,27 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
   document.body.dataset.matchStatus = snapshot.status;
   timeLabel.textContent = formatTime(snapshot.remainingMs);
   mapVersion.textContent = `v${snapshot.mapVersion}`;
-  worldLabel.textContent = `${snapshot.world.sizeMeters}m / ${snapshot.world.chunksPerAxis}×${snapshot.world.chunksPerAxis}`;
+  worldLabel.textContent = `${(snapshot.world.sizeMeters / 1_000).toFixed(0)}km / ${snapshot.world.chunksPerAxis}×${snapshot.world.chunksPerAxis}`;
   seedLabel.textContent = String(snapshot.seed);
   document.body.dataset.worldSize = String(snapshot.world.sizeMeters);
-  document.body.dataset.activeChunks = `${snapshot.world.chunksPerAxis * snapshot.world.chunksPerAxis}`;
-  for (const obstacle of snapshot.obstacles) syncObstacle(obstacle);
-  for (const player of snapshot.players) syncPlayer(player);
 
   const localPlayer = snapshot.players.find((player) => player.id === localPlayerId);
   if (localPlayer !== undefined) {
+    syncStreamedWorld(snapshot.world, snapshot.seed, localPlayer);
+    const snapshotPlayerIds = new Set(snapshot.players.map((player) => player.id));
+    for (const id of playerVisuals.keys()) {
+      if (snapshotPlayerIds.has(id)) continue;
+      playerVisuals.get(id)?.root.dispose();
+      playerVisuals.delete(id);
+    }
+    for (const player of snapshot.players) {
+      const playerChunkId = chunkId(chunkAtPosition(snapshot.world, player.position));
+      syncPlayer(player, player.id === localPlayer.id || activeChunkIds.has(playerChunkId));
+    }
+    for (const obstacle of snapshot.obstacles) {
+      const obstacleChunkId = chunkId(chunkAtPosition(snapshot.world, obstacle));
+      syncObstacle(obstacle, preloadedChunkIds.has(obstacleChunkId));
+    }
     roleLabel.textContent = localPlayer.role === "ONI" ? "鬼 / ONI" : "逃走者";
     roleLabel.style.color = localPlayer.role === "ONI" ? "#ff6977" : "#59f5bd";
     dangerBanner.hidden = localPlayer.role !== "ONI";
@@ -453,19 +577,24 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
 
   cityCore.position.x = snapshot.cityCore.position.x;
   cityCore.position.z = snapshot.cityCore.position.z;
+  const cityCoreChunkId = chunkId(chunkAtPosition(snapshot.world, snapshot.cityCore.position));
+  cityCore.setEnabled(preloadedChunkIds.has(cityCoreChunkId));
   targetRing.position.x = snapshot.cityCore.target.x;
   targetRing.position.z = snapshot.cityCore.target.z;
   targetRing.scaling.setAll(snapshot.cityCore.radius / 28);
   const warning = snapshot.cityCore.warningStartedAtMs !== null;
-  targetRing.isVisible = warning;
+  const targetChunkId = chunkId(chunkAtPosition(snapshot.world, snapshot.cityCore.target));
+  const targetIsPreloaded = preloadedChunkIds.has(targetChunkId);
+  targetRing.isVisible = warning && targetIsPreloaded;
   patchWarning.hidden = !warning;
   if (warning) {
+    barrierPreview.isVisible = false;
     const remainingMs = Math.max(0, snapshot.cityCore.patchAppliesAtMs - snapshot.nowMs);
     patchCountdown.textContent = `${(remainingMs / 1_000).toFixed(1)}s`;
     const futureBarrier = snapshot.obstacles.find(
       (obstacle) => obstacle.id === `barrier-${snapshot.cityCore.patchIndex}`,
     );
-    if (futureBarrier !== undefined) {
+    if (futureBarrier !== undefined && targetIsPreloaded) {
       const riseProgress = Math.max(0, Math.min(1, 1 - remainingMs / 1_000));
       const eased = riseProgress * riseProgress * (3 - 2 * riseProgress);
       barrierPreview.isVisible = true;
@@ -546,11 +675,26 @@ scene.onBeforeRenderObservable.add(() => {
     lastPerformanceUpdate = performance.now();
     const fps = engine.getFps();
     const activeMeshes = scene.getActiveMeshes().length;
-    performanceLabel.textContent = `FPS ${fps.toFixed(0)} / MESH ${activeMeshes}`;
+    performanceLabel.textContent = `FPS ${fps.toFixed(0)} / MESH ${activeMeshes} / ${activeChunkIds.size}A ${preloadedChunkIds.size}P / NAV ${navigationUpdateMs.toFixed(1)}ms`;
     performanceLabel.dataset.fps = fps.toFixed(2);
     performanceLabel.dataset.meshes = String(activeMeshes);
+    performanceLabel.dataset.activeChunks = String(activeChunkIds.size);
+    performanceLabel.dataset.preloadedChunks = String(preloadedChunkIds.size);
+    performanceLabel.dataset.navmeshMs = navigationUpdateMs.toFixed(3);
+    const chromiumPerformance = performance as Performance & {
+      memory?: { usedJSHeapSize: number };
+    };
+    if (chromiumPerformance.memory !== undefined) {
+      document.body.dataset.heapMb = (chromiumPerformance.memory.usedJSHeapSize / 1_048_576).toFixed(2);
+    }
   }
 });
+
+syncStreamedWorld(
+  DEFAULT_WORLD_SPEC,
+  20260827,
+  { position: { x: 0, z: 0 }, velocity: { x: 0, z: 0 } },
+);
 
 engine.runRenderLoop(() => scene.render());
 window.addEventListener("resize", () => engine.resize());

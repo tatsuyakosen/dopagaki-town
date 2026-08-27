@@ -16,7 +16,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "PORT=3102 MATCH_DURATION_MS=600000 PATCH_INTERVAL_MS=20000 npm run dev:server",
+      command: "PORT=3102 MATCH_DURATION_MS=600000 PATCH_INTERVAL_MS=20000 HUMAN_SPEED_MULTIPLIER=10 npm run dev:server",
       url: "http://127.0.0.1:3102/health",
       reuseExistingServer: false,
       timeout: 30_000,

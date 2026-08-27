@@ -12,8 +12,12 @@ test("players can enter, move, observe CITY CORE, and finish a match", async ({ 
   await expect(page.locator("#hud")).toBeVisible();
   await expect(page.locator("#score-list li")).toHaveCount(4);
   await expect(page.locator("body")).toHaveAttribute("data-match-status", "RUNNING");
-  await expect(page.locator("body")).toHaveAttribute("data-world-size", "500");
+  await expect(page.locator("body")).toHaveAttribute("data-world-size", "5000");
+  await expect(page.locator("body")).toHaveAttribute("data-world-chunks", "400");
   await expect(page.locator("body")).toHaveAttribute("data-active-chunks", "9");
+  await expect(page.locator("body")).toHaveAttribute("data-preloaded-chunks", "25");
+  await expect(page.locator("body")).toHaveAttribute("data-loaded-chunks", "25");
+  await expect(page.locator("body")).toHaveAttribute("data-navigation-mode", "GRAPH_COLLIDER");
 
   const secondPage = await page.context().newPage();
   secondPage.on("pageerror", (error) => pageErrors.push(error.message));
@@ -28,9 +32,17 @@ test("players can enter, move, observe CITY CORE, and finish a match", async ({ 
   const position = page.locator("#player-position");
   const before = Number(await position.getAttribute("data-z"));
   await page.keyboard.down("w");
-  await page.waitForTimeout(900);
+  await expect.poll(async () => Number(await position.getAttribute("data-z")), { timeout: 7_000 }).toBeLessThan(-2_400);
   await page.keyboard.up("w");
-  await expect.poll(async () => Number(await position.getAttribute("data-z"))).not.toBe(before);
+  expect(Number(await position.getAttribute("data-z"))).not.toBe(before);
+  expect(Number(await page.locator("body").getAttribute("data-loaded-chunks"))).toBeLessThanOrEqual(25);
+  expect(Number(await page.locator("body").getAttribute("data-active-chunks"))).toBeLessThanOrEqual(9);
+
+  await page.keyboard.down("s");
+  await expect.poll(async () => Number(await position.getAttribute("data-z")), { timeout: 7_000 }).toBeGreaterThan(2_400);
+  await page.keyboard.up("s");
+  expect(Number(await page.locator("body").getAttribute("data-loaded-chunks"))).toBeLessThanOrEqual(25);
+  expect(Number(await page.locator("body").getAttribute("data-active-chunks"))).toBeLessThanOrEqual(9);
 
   await expect(page.locator("#map-version")).not.toHaveText("v1", { timeout: 6_000 });
   await expect

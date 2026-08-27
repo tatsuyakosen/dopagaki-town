@@ -33,6 +33,7 @@ export const WorldSpecSchema = z.object({
   chunksPerAxis: z.number().int().positive(),
   chunkSizeMeters: z.number().positive(),
   activeChunkRadius: z.number().int().nonnegative(),
+  preloadChunkRadius: z.number().int().nonnegative(),
   roadOffsets: z.array(z.number()).min(3),
   roadWidth: z.number().positive(),
 });
@@ -68,6 +69,9 @@ export const CityCoreSchema = z.object({
   patchAppliesAtMs: z.number().nonnegative(),
   radius: z.number().positive(),
   patchIndex: z.number().int().nonnegative(),
+  patchId: z.string(),
+  patchPhase: z.enum(["IDLE", "PREPARED"]),
+  affectedChunkIds: z.array(z.string()),
 });
 
 export const MatchStatusSchema = z.enum(["WAITING", "RUNNING", "FINISHED"]);
