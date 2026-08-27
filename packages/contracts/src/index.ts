@@ -25,6 +25,15 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("RESTART") }),
   z.object({ type: z.literal("PING"), sentAt: z.number().finite() }),
   z.object({
+    type: z.literal("TRANSIT_RESERVE"),
+    reservationId: z.string().min(1).max(128),
+    departureId: z.string().min(1).max(128),
+  }),
+  z.object({
+    type: z.literal("TRANSIT_CANCEL"),
+    reservationId: z.string().min(1).max(128),
+  }),
+  z.object({
     type: z.literal("PATCH_APPLIED"),
     patchId: z.string().min(1),
     mapVersion: z.number().int().positive(),
@@ -35,6 +44,61 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 export const RoleSchema = z.enum(["ONI", "RUNNER"]);
 export const PlayerKindSchema = z.enum(["HUMAN", "BOT"]);
 export const BotStrategySchema = z.enum(["CHASE", "CITY_CORE", "RAIL"]);
+
+export const TransitPhaseSchema = z.enum(["ON_FOOT", "WAITING", "IN_TRANSIT", "ARRIVING"]);
+
+export const TransitStationSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  chunkId: z.string().min(1),
+  position: Vec2Schema,
+});
+
+export const TransitRouteSchema = z.object({
+  id: z.string().min(1),
+  fromStationId: z.string().min(1),
+  toStationId: z.string().min(1),
+  durationMs: z.number().int().positive(),
+  fareYen: z.number().int().positive(),
+  transfers: z.number().int().nonnegative(),
+});
+
+export const TransitDepartureSchema = z.object({
+  id: z.string().min(1),
+  routeId: z.string().min(1),
+  departureAtMs: z.number().int().nonnegative(),
+  arrivalAtMs: z.number().int().positive(),
+});
+
+export const TransitGraphSchema = z.object({
+  source: z.enum(["FIXTURE", "EXTERNAL"]),
+  seed: z.number().int(),
+  stations: z.array(TransitStationSchema).min(4).max(6),
+  routes: z.array(TransitRouteSchema).min(1),
+  timetable: z.array(TransitDepartureSchema).min(1),
+});
+
+export const TransitReservationSchema = z.object({
+  reservationId: z.string().min(1).max(128),
+  departureId: z.string().min(1).max(128),
+  routeId: z.string().min(1),
+  fromStationId: z.string().min(1),
+  toStationId: z.string().min(1),
+  fareYen: z.number().int().positive(),
+  status: z.enum(["RESERVED", "COMMITTED"]),
+  reservedAtMs: z.number().nonnegative(),
+  departureAtMs: z.number().nonnegative(),
+  arrivalAtMs: z.number().positive(),
+});
+
+export const PlayerTransitStateSchema = z.object({
+  phase: TransitPhaseSchema,
+  balanceYen: z.number().int().nonnegative(),
+  reservedFareYen: z.number().int().nonnegative(),
+  currentStationId: z.string().nullable(),
+  reservation: TransitReservationSchema.nullable(),
+  arrivalAtMs: z.number().nonnegative().nullable(),
+});
 
 export const WorldSpecSchema = z.object({
   sizeMeters: z.number().positive(),
@@ -58,6 +122,7 @@ export const PlayerSnapshotSchema = z.object({
   oniDurationMs: z.number().nonnegative(),
   protectedUntilMs: z.number().nonnegative(),
   connected: z.boolean(),
+  transit: PlayerTransitStateSchema,
 });
 
 export const ObstacleSchema = z.object({
@@ -166,7 +231,18 @@ export const PatchEvaluationSchema = z.object({
 export const AIReplayEntrySchema = z.object({
   sequence: z.number().int().nonnegative(),
   atMs: z.number().nonnegative(),
-  phase: z.enum(["STAGE_GENERATED", "CANDIDATES_EVALUATED", "PATCH_COMMITTED", "ROLLBACK", "TAG_CHANGED"]),
+  phase: z.enum([
+    "STAGE_GENERATED",
+    "CANDIDATES_EVALUATED",
+    "PATCH_COMMITTED",
+    "ROLLBACK",
+    "TAG_CHANGED",
+    "TRANSIT_RESERVED",
+    "TRANSIT_REJECTED",
+    "TRANSIT_BOARDED",
+    "TRANSIT_ARRIVED",
+    "TRANSIT_CANCELLED",
+  ]),
   patchId: z.string().nullable(),
   selectedPatchId: z.string().nullable(),
   summary: z.string(),
@@ -210,6 +286,7 @@ export const MatchSnapshotSchema = z.object({
   mapChecksum: z.string().regex(/^[0-9a-f]{8}$/),
   rollbackCount: z.number().int().nonnegative(),
   aiReplay: z.array(AIReplayEntrySchema),
+  transitGraph: TransitGraphSchema,
   players: z.array(PlayerSnapshotSchema).length(4),
   obstacles: z.array(ObstacleSchema),
   cityCore: CityCoreSchema,
@@ -232,7 +309,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("ERROR"),
-    code: z.enum(["ROOM_FULL", "SESSION_EXPIRED", "INVALID_SESSION", "BAD_MESSAGE"]).optional(),
+    code: z.enum(["ROOM_FULL", "SESSION_EXPIRED", "INVALID_SESSION", "BAD_MESSAGE", "TRANSIT_REJECTED"]).optional(),
     message: z.string(),
   }),
   z.object({
@@ -247,6 +324,13 @@ export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type Role = z.infer<typeof RoleSchema>;
 export type PlayerKind = z.infer<typeof PlayerKindSchema>;
 export type BotStrategy = z.infer<typeof BotStrategySchema>;
+export type TransitPhase = z.infer<typeof TransitPhaseSchema>;
+export type TransitStation = z.infer<typeof TransitStationSchema>;
+export type TransitRoute = z.infer<typeof TransitRouteSchema>;
+export type TransitDeparture = z.infer<typeof TransitDepartureSchema>;
+export type TransitGraph = z.infer<typeof TransitGraphSchema>;
+export type TransitReservation = z.infer<typeof TransitReservationSchema>;
+export type PlayerTransitState = z.infer<typeof PlayerTransitStateSchema>;
 export type WorldSpec = z.infer<typeof WorldSpecSchema>;
 export type PlayerSnapshot = z.infer<typeof PlayerSnapshotSchema>;
 export type Obstacle = z.infer<typeof ObstacleSchema>;

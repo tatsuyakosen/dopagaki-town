@@ -16,7 +16,7 @@ test("5km streaming completes a real ten-minute match without resource growth", 
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
   await page.goto("/");
-  await page.getByLabel("CALL SIGN").fill("M5 Soak Runner");
+  await page.getByLabel("CALL SIGN").fill("M6 Soak Runner");
   await page.getByRole("button", { name: /入城する/ }).click();
   await expect(page.locator("body")).toHaveAttribute("data-world-size", "5000");
   await expect(page.locator("body")).toHaveAttribute("data-world-chunks", "400");
@@ -71,12 +71,14 @@ test("5km streaming completes a real ten-minute match without resource growth", 
     reconnectCount: Number(await page.locator("body").getAttribute("data-reconnect-count")),
     latencyP95Ms: Number(await page.locator("body").getAttribute("data-latency-p95")),
     maximumReconciliationError: Math.max(...reconciliationSamples),
+    minimumBalanceYen: Number(await page.locator("body").getAttribute("data-minimum-balance-yen")),
+    transitReplayCount: Number(await page.locator("body").getAttribute("data-transit-replay-count")),
   };
-  await testInfo.attach("m5-soak-report", {
+  await testInfo.attach("m6-soak-report", {
     body: JSON.stringify(report, null, 2),
     contentType: "application/json",
   });
-  process.stdout.write(`M5_SOAK_REPORT ${JSON.stringify(report)}\n`);
+  process.stdout.write(`M6_SOAK_REPORT ${JSON.stringify(report)}\n`);
 
   expect(pageErrors).toEqual([]);
   expect(averageFps).toBeGreaterThanOrEqual(20);
@@ -90,6 +92,8 @@ test("5km streaming completes a real ten-minute match without resource growth", 
   expect(report.reconnectCount).toBe(1);
   expect(report.latencyP95Ms).toBeLessThanOrEqual(150);
   expect(report.maximumReconciliationError).toBeLessThan(25);
+  expect(report.minimumBalanceYen).toBeGreaterThanOrEqual(0);
+  expect(report.transitReplayCount).toBeGreaterThan(0);
 });
 
 function average(values: number[]): number {

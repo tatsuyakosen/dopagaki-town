@@ -94,6 +94,34 @@ function handleMessage(socket: WebSocket, connectionId: string, payload: string)
     case "PING":
       send(socket, { type: "PONG", sentAt: parsed.data.sentAt });
       break;
+    case "TRANSIT_RESERVE": {
+      const result = room.reserveTransit(
+        connectionId,
+        parsed.data.reservationId,
+        parsed.data.departureId,
+      );
+      if (result === null || !result.accepted) {
+        send(socket, {
+          type: "ERROR",
+          code: "TRANSIT_REJECTED",
+          message: result?.message ?? "入城後に予約してください",
+        });
+      }
+      broadcastSnapshot();
+      break;
+    }
+    case "TRANSIT_CANCEL": {
+      const result = room.cancelTransit(connectionId, parsed.data.reservationId);
+      if (result === null || !result.accepted) {
+        send(socket, {
+          type: "ERROR",
+          code: "TRANSIT_REJECTED",
+          message: result?.message ?? "入城後に取消してください",
+        });
+      }
+      broadcastSnapshot();
+      break;
+    }
     case "PATCH_APPLIED":
       room.acknowledgePatch(
         connectionId,

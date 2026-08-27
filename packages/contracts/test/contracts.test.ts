@@ -43,6 +43,23 @@ describe("runtime contracts", () => {
     })).toMatchObject({ type: "WELCOME", resumed: true, playerToken });
   });
 
+  it("validates idempotent transit reservation and cancellation messages", () => {
+    expect(ClientMessageSchema.parse({
+      type: "TRANSIT_RESERVE",
+      reservationId: "reservation-1",
+      departureId: "departure-1",
+    })).toMatchObject({ type: "TRANSIT_RESERVE", reservationId: "reservation-1" });
+    expect(ClientMessageSchema.parse({
+      type: "TRANSIT_CANCEL",
+      reservationId: "reservation-1",
+    })).toMatchObject({ type: "TRANSIT_CANCEL", reservationId: "reservation-1" });
+    expect(() => ClientMessageSchema.parse({
+      type: "TRANSIT_RESERVE",
+      reservationId: "",
+      departureId: "departure-1",
+    })).toThrow();
+  });
+
   it("accepts the allowlisted MapPatch DSL and rejects unknown operations", () => {
     const patch = {
       patchId: "patch-contract",

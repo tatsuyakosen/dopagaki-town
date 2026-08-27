@@ -62,6 +62,13 @@ const patchOperation = required<HTMLElement>("#patch-operation");
 const patchReason = required<HTMLElement>("#patch-reason");
 const patchEffect = required<HTMLElement>("#patch-effect");
 const scoreList = required<HTMLOListElement>("#score-list");
+const transitBalance = required<HTMLElement>("#transit-balance");
+const transitStatus = required<HTMLElement>("#transit-status");
+const transitStation = required<HTMLElement>("#transit-station");
+const transitNext = required<HTMLElement>("#transit-next");
+const transitFare = required<HTMLElement>("#transit-fare");
+const transitAction = required<HTMLButtonElement>("#transit-action");
+const transitMessage = required<HTMLElement>("#transit-message");
 const playerPosition = required<HTMLElement>("#player-position");
 const performanceLabel = required<HTMLElement>("#performance-label");
 const dangerBanner = required<HTMLElement>("#danger-banner");
@@ -498,12 +505,16 @@ let lastEventId = persistedSession?.lastAckedEventId ?? -1;
 let lastKnownMapVersion = persistedSession?.mapVersion ?? 1;
 let lastKnownMatchId = persistedSession?.matchId ?? "";
 let lastScoreboardUpdateAt = Number.NEGATIVE_INFINITY;
+let lastTransitHudUpdateAt = Number.NEGATIVE_INFINITY;
+let lastTransitHudKey = "";
 let lastAcknowledgedPatchKey = persistedSession?.lastAcknowledgedPatchKey ?? "";
 let enteredName = persistedSession?.playerName ?? "Runner";
 let connectionTimeoutId: number | null = null;
 let reconnectTimeoutId: number | null = null;
 let reconnectAttempt = 0;
 let reconnectCount = 0;
+let selectedDepartureId: string | null = null;
+let reservationSequence = 0;
 const keys = new Set<string>();
 const latencySamples: number[] = [];
 
@@ -635,7 +646,8 @@ function connect(): void {
       latestSnapshot = parsed.data.snapshot;
       syncSnapshot(parsed.data.snapshot);
     } else if (parsed.data.type === "ERROR") {
-      entryError.textContent = parsed.data.message;
+      if (parsed.data.code === "TRANSIT_REJECTED") transitMessage.textContent = parsed.data.message;
+      else entryError.textContent = parsed.data.message;
       enterButton.disabled = false;
       if (parsed.data.code === "SESSION_EXPIRED" || parsed.data.code === "INVALID_SESSION") {
         clearPlayerSession();
@@ -703,6 +715,115 @@ function syncScoreboard(snapshot: MatchSnapshot): void {
   );
 }
 
+function stationName(snapshot: MatchSnapshot, stationId: string): string {
+  return snapshot.transitGraph.stations.find((station) => station.id === stationId)?.name ?? stationId;
+}
+
+function syncTransitHud(snapshot: MatchSnapshot, player: PlayerSnapshot): void {
+  const transit = player.transit;
+  const reservation = transit.reservation;
+  const nearestStation = snapshot.transitGraph.stations
+    .map((station) => ({
+      station,
+      distance: Math.hypot(player.position.x - station.position.x, player.position.z - station.position.z),
+    }))
+    .sort((left, right) => left.distance - right.distance)[0];
+  selectedDepartureId = null;
+  transitBalance.textContent = `¥${transit.balanceYen.toLocaleString("ja-JP")}`;
+  transitAction.disabled = true;
+  transitAction.dataset.action = "NONE";
+  transitFare.textContent = transit.reservedFareYen > 0 ? `¥${transit.reservedFareYen}` : "—";
+
+  document.body.dataset.transitPhase = transit.phase;
+  document.body.dataset.balanceYen = String(transit.balanceYen);
+  document.body.dataset.reservedFareYen = String(transit.reservedFareYen);
+  document.body.dataset.currentStationId = transit.currentStationId ?? "";
+  document.body.dataset.reservationId = reservation?.reservationId ?? "";
+  document.body.dataset.departureId = reservation?.departureId ?? "";
+  document.body.dataset.minimumBalanceYen = String(
+    Math.min(...snapshot.players.map((candidate) => candidate.transit.balanceYen)),
+  );
+  document.body.dataset.transitReplayCount = String(
+    snapshot.aiReplay.filter((entry) => entry.phase.startsWith("TRANSIT_")).length,
+  );
+  document.body.dataset.nearestStationId = nearestStation?.station.id ?? "";
+  document.body.dataset.nearestStationDistance = (nearestStation?.distance ?? 0).toFixed(3);
+  document.body.dataset.nearestStationX = String(nearestStation?.station.position.x ?? 0);
+  document.body.dataset.nearestStationZ = String(nearestStation?.station.position.z ?? 0);
+
+  if (transit.phase === "WAITING" && reservation !== null) {
+    transitStatus.textContent = "乗車待ち / WAITING";
+    transitStation.textContent = stationName(snapshot, reservation.fromStationId);
+    transitNext.textContent = `${stationName(snapshot, reservation.toStationId)}行 ${formatTime(reservation.departureAtMs - snapshot.nowMs)}後`;
+    transitFare.textContent = `¥${reservation.fareYen} RESERVED`;
+    transitAction.textContent = "予約を取り消す";
+    transitAction.dataset.action = "CANCEL";
+    transitAction.disabled = false;
+    transitMessage.textContent = "発車時に駅から離れていると自動取消";
+    return;
+  }
+
+  if (transit.phase === "IN_TRANSIT" && reservation !== null) {
+    transitStatus.textContent = "乗車中 / IN TRANSIT";
+    transitStation.textContent = `${stationName(snapshot, reservation.fromStationId)} → ${stationName(snapshot, reservation.toStationId)}`;
+    transitNext.textContent = `到着まで ${formatTime(reservation.arrivalAtMs - snapshot.nowMs)}`;
+    transitFare.textContent = `¥${reservation.fareYen} PAID`;
+    transitAction.textContent = "乗車中はタッチ不可";
+    transitMessage.textContent = "到着後3秒間は保護されます";
+    return;
+  }
+
+  if (transit.phase === "ARRIVING") {
+    transitStatus.textContent = "到着保護 / ARRIVING";
+    transitStation.textContent = transit.currentStationId === null
+      ? "到着駅"
+      : stationName(snapshot, transit.currentStationId);
+    transitNext.textContent = `保護 ${formatTime(player.protectedUntilMs - snapshot.nowMs)}`;
+    transitAction.textContent = "到着処理中";
+    transitMessage.textContent = "保護終了後に徒歩へ戻ります";
+    return;
+  }
+
+  transitStatus.textContent = "徒歩移動中 / ON FOOT";
+  if (transit.currentStationId === null) {
+    transitStation.textContent = nearestStation === undefined
+      ? "駅から離れています"
+      : `${nearestStation.station.name}まで ${Math.round(nearestStation.distance)}m`;
+    transitNext.textContent = "駅構内で便を選択";
+    transitAction.textContent = "駅へ移動";
+    transitMessage.textContent = "駅エリア内で予約できます";
+    return;
+  }
+
+  const departure = snapshot.transitGraph.timetable
+    .filter((candidate) => candidate.departureAtMs > snapshot.nowMs + 500)
+    .map((candidate) => ({
+      departure: candidate,
+      route: snapshot.transitGraph.routes.find((route) => route.id === candidate.routeId),
+    }))
+    .filter((candidate) => candidate.route?.fromStationId === transit.currentStationId)
+    .sort((left, right) => left.departure.departureAtMs - right.departure.departureAtMs)[0];
+  transitStation.textContent = stationName(snapshot, transit.currentStationId);
+  if (departure?.route === undefined) {
+    transitNext.textContent = "本日の便は終了";
+    transitAction.textContent = "便なし";
+    transitMessage.textContent = "徒歩で試合を継続できます";
+    return;
+  }
+  selectedDepartureId = departure.departure.id;
+  transitNext.textContent = `${stationName(snapshot, departure.route.toStationId)}行 ${formatTime(departure.departure.departureAtMs - snapshot.nowMs)}後`;
+  transitFare.textContent = `¥${departure.route.fareYen}`;
+  if (departure.route.fareYen > transit.balanceYen) {
+    transitAction.textContent = "残高不足";
+    transitMessage.textContent = "徒歩で試合を継続できます";
+    return;
+  }
+  transitAction.textContent = `乗車予約 ¥${departure.route.fareYen}`;
+  transitAction.dataset.action = "RESERVE";
+  transitAction.disabled = false;
+  transitMessage.textContent = "運賃は乗車時に確定します";
+}
+
 function syncSnapshot(snapshot: MatchSnapshot): void {
   if (lastKnownMatchId.length > 0 && snapshot.matchId !== lastKnownMatchId) {
     lastEventId = -1;
@@ -751,6 +872,17 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
     playerPosition.textContent = `X ${localPlayer.position.x.toFixed(1)} / Z ${localPlayer.position.z.toFixed(1)}`;
     playerPosition.dataset.x = localPlayer.position.x.toFixed(3);
     playerPosition.dataset.z = localPlayer.position.z.toFixed(3);
+    const transitHudKey = [
+      localPlayer.transit.phase,
+      localPlayer.transit.balanceYen,
+      localPlayer.transit.currentStationId,
+      localPlayer.transit.reservation?.reservationId,
+    ].join(":");
+    if (transitHudKey !== lastTransitHudKey || snapshot.nowMs - lastTransitHudUpdateAt >= 250) {
+      lastTransitHudKey = transitHudKey;
+      lastTransitHudUpdateAt = snapshot.nowMs;
+      syncTransitHud(snapshot, localPlayer);
+    }
   }
 
   cityCore.position.x = snapshot.cityCore.position.x;
@@ -845,8 +977,34 @@ playerName.addEventListener("keydown", (event) => {
   if (event.key === "Enter") enterButton.click();
 });
 restartButton.addEventListener("click", () => sendMessage({ type: "RESTART" }));
+transitAction.addEventListener("click", () => {
+  if (localPlayerId === null || latestSnapshot === null) return;
+  const localPlayer = latestSnapshot.players.find((player) => player.id === localPlayerId);
+  if (localPlayer === undefined) return;
+  if (transitAction.dataset.action === "CANCEL" && localPlayer.transit.reservation !== null) {
+    transitAction.disabled = true;
+    sendMessage({
+      type: "TRANSIT_CANCEL",
+      reservationId: localPlayer.transit.reservation.reservationId,
+    });
+    return;
+  }
+  if (transitAction.dataset.action !== "RESERVE" || selectedDepartureId === null) return;
+  reservationSequence += 1;
+  transitAction.disabled = true;
+  sendMessage({
+    type: "TRANSIT_RESERVE",
+    reservationId: `web-${localPlayerId}-${Date.now()}-${reservationSequence}`,
+    departureId: selectedDepartureId,
+  });
+});
 
 window.addEventListener("keydown", (event) => {
+  if (event.code === "KeyE" && !event.repeat && !hud.hidden) {
+    transitAction.click();
+    event.preventDefault();
+    return;
+  }
   if (["KeyW", "KeyA", "KeyS", "KeyD", "ShiftLeft", "ShiftRight"].includes(event.code)) {
     keys.add(event.code);
     event.preventDefault();
@@ -878,7 +1036,9 @@ scene.onBeforeRenderObservable.add(() => {
   const predictionDeltaSeconds = Math.min(0.05, Math.max(0, frameNow - lastPredictionFrameAt) / 1_000);
   lastPredictionFrameAt = frameNow;
   for (const [playerId, visual] of playerVisuals) {
-    if (playerId === localPlayerId && latestSnapshot?.status === "RUNNING") {
+    const latestPlayer = latestSnapshot?.players.find((player) => player.id === playerId);
+    const allowsPrediction = latestPlayer?.transit.phase === "ON_FOOT" || latestPlayer?.transit.phase === "WAITING";
+    if (playerId === localPlayerId && latestSnapshot?.status === "RUNNING" && allowsPrediction) {
       const inputX = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
       const inputZ = (keys.has("KeyS") ? 1 : 0) - (keys.has("KeyW") ? 1 : 0);
       const magnitude = Math.hypot(inputX, inputZ);

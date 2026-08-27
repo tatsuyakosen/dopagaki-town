@@ -159,7 +159,14 @@ export function evaluatePatch(patch: MapPatch, context: VerifierContext): PatchE
   const targetsStation = context.metadata.stations.some(
     (station) => distanceBetween(station.position, patch.target) <= 80,
   );
-  if (targetsStation) addViolation(violations, "F-06", "駅構内は改築対象外です");
+  const targetsTransitProtectedPlayer = context.players.some(
+    (player) =>
+      (player.transit.phase === "IN_TRANSIT" || player.transit.phase === "ARRIVING") &&
+      distanceBetween(player.position, patch.target) <= 80,
+  );
+  if (targetsStation || targetsTransitProtectedPlayer) {
+    addViolation(violations, "F-06", "駅構内・乗車中・到着地点は改築対象外です");
+  }
 
   const oni = context.players.find((player) => player.role === "ONI");
   if (oni !== undefined) {

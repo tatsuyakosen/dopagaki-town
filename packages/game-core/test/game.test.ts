@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   TAG_PROTECTION_MS,
   acknowledgeMapChecksum,
+  cancelTransit,
   checksumOf,
   createGame,
   gameCheckpointOf,
   markHumanDisconnected,
   replaceBotWithHuman,
+  reserveTransit,
   restoreGame,
   restoreHumanControl,
   snapshotOf,
@@ -201,5 +203,133 @@ describe("authoritative tag rules", () => {
       stepGame(restored, {}, 50);
     }
     expect(checksumOf(restored)).toBe(checksumOf(original));
+  });
+
+  it("reserves fare idempotently and rejects insufficient balance without changing it", () => {
+    const game = createGame({ seed: 20260827, durationMs: 60_000 });
+    const human = replaceBotWithHuman(game, "human-transit", "Transit Player");
+    const station = game.transitGraph.stations[0];
+    const departure = game.transitGraph.timetable.find((candidate) => {
+      const route = game.transitGraph.routes.find((item) => item.id === candidate.routeId);
+      return route?.fromStationId === station?.id;
+    });
+    const route = game.transitGraph.routes.find((candidate) => candidate.id === departure?.routeId);
+    expect(station).toBeDefined();
+    expect(departure).toBeDefined();
+    expect(route).toBeDefined();
+    if (station === undefined || departure === undefined || route === undefined) return;
+    human.position = { ...station.position };
+    human.transit.balanceYen = route.fareYen - 1;
+
+    const rejected = reserveTransit(game, human.id, "reservation-insufficient", departure.id);
+    expect(rejected).toMatchObject({ accepted: false, code: "INSUFFICIENT_BALANCE" });
+    expect(human.transit.balanceYen).toBe(route.fareYen - 1);
+    expect(human.transit.reservedFareYen).toBe(0);
+
+    human.transit.balanceYen = 1_000;
+    const accepted = reserveTransit(game, human.id, "reservation-ok", departure.id);
+    const duplicate = reserveTransit(game, human.id, "reservation-ok", departure.id);
+    expect(accepted).toMatchObject({ accepted: true, code: "RESERVED" });
+    expect(duplicate).toMatchObject({ accepted: true, code: "ALREADY_RESERVED" });
+    expect(human.transit.balanceYen).toBe(1_000);
+    expect(human.transit.reservedFareYen).toBe(route.fareYen);
+  });
+
+  it("commits fare once, restores in-transit checkpoint, and protects arrival for three seconds", () => {
+    const game = createGame({ seed: 20260827, durationMs: 60_000, patchIntervalMs: 60_000 });
+    const human = replaceBotWithHuman(game, "human-trip", "Trip Player");
+    const station = game.transitGraph.stations[0];
+    const departure = game.transitGraph.timetable.find((candidate) => {
+      const route = game.transitGraph.routes.find((item) => item.id === candidate.routeId);
+      return route?.fromStationId === station?.id;
+    });
+    const route = game.transitGraph.routes.find((candidate) => candidate.id === departure?.routeId);
+    expect(station).toBeDefined();
+    expect(departure).toBeDefined();
+    expect(route).toBeDefined();
+    if (station === undefined || departure === undefined || route === undefined) return;
+    human.position = { ...station.position };
+    expect(reserveTransit(game, human.id, "reservation-trip", departure.id).accepted).toBe(true);
+    startGame(game);
+    while (game.nowMs < departure.departureAtMs) stepGame(game, {}, 50);
+    expect(human.transit.phase).toBe("IN_TRANSIT");
+    expect(human.transit.balanceYen).toBe(1_000 - route.fareYen);
+
+    const oni = game.players.find((player) => player.id !== human.id);
+    expect(oni).toBeDefined();
+    if (oni === undefined) return;
+    for (const player of game.players) {
+      player.kind = "HUMAN";
+      player.role = "RUNNER";
+    }
+    oni.role = "ONI";
+    oni.position = { ...human.position };
+    stepGame(game, {}, 50);
+    expect(oni.role).toBe("ONI");
+    expect(human.role).toBe("RUNNER");
+
+    const restored = restoreGame(gameCheckpointOf(game));
+    const restoredHuman = restored.players.find((player) => player.id === human.id);
+    expect(restoredHuman?.transit).toEqual(human.transit);
+    expect(restored.processedReservationIds).toEqual(game.processedReservationIds);
+    while (game.nowMs < departure.arrivalAtMs) {
+      stepGame(game, {}, 50);
+      stepGame(restored, {}, 50);
+    }
+    expect(human.transit.phase).toBe("ARRIVING");
+    expect(restoredHuman?.transit.phase).toBe("ARRIVING");
+    expect(restoredHuman?.position).toEqual(human.position);
+    expect(human.protectedUntilMs).toBe(game.nowMs + 3_000);
+    expect(checksumOf(restored)).toBe(checksumOf(game));
+
+    for (let elapsed = 0; elapsed < 3_000; elapsed += 50) {
+      stepGame(game, {}, 50);
+    }
+    expect(human.transit.phase).toBe("ON_FOOT");
+    expect(human.transit.balanceYen).toBe(1_000 - route.fareYen);
+    expect(reserveTransit(game, human.id, "reservation-trip", departure.id)).toMatchObject({
+      accepted: false,
+      code: "DUPLICATE_RESERVATION",
+    });
+  });
+
+  it("releases a missed or cancelled reservation without debiting fare", () => {
+    const game = createGame({ seed: 20260827, durationMs: 60_000, patchIntervalMs: 60_000 });
+    const human = replaceBotWithHuman(game, "human-miss", "Miss Player");
+    const station = game.transitGraph.stations[0];
+    const departure = game.transitGraph.timetable.find((candidate) => {
+      const route = game.transitGraph.routes.find((item) => item.id === candidate.routeId);
+      return route?.fromStationId === station?.id;
+    });
+    expect(station).toBeDefined();
+    expect(departure).toBeDefined();
+    if (station === undefined || departure === undefined) return;
+    human.position = { ...station.position };
+    expect(reserveTransit(game, human.id, "reservation-cancel", departure.id).accepted).toBe(true);
+    expect(reserveTransit(game, human.id, "reservation-conflict", departure.id)).toMatchObject({
+      accepted: false,
+      code: "DUPLICATE_RESERVATION",
+    });
+    expect(cancelTransit(game, human.id, "reservation-cancel")).toMatchObject({
+      accepted: true,
+      code: "CANCELLED",
+    });
+    expect(cancelTransit(game, human.id, "reservation-cancel")).toMatchObject({
+      accepted: false,
+      code: "DUPLICATE_RESERVATION",
+    });
+    expect(reserveTransit(game, human.id, "reservation-conflict", departure.id)).toMatchObject({
+      accepted: false,
+      code: "DUPLICATE_RESERVATION",
+    });
+    expect(human.transit.balanceYen).toBe(1_000);
+
+    expect(reserveTransit(game, human.id, "reservation-miss", departure.id).accepted).toBe(true);
+    human.position = { x: -500, z: 0 };
+    startGame(game);
+    while (game.nowMs < departure.departureAtMs) stepGame(game, {}, 50);
+    expect(human.transit.phase).toBe("ON_FOOT");
+    expect(human.transit.balanceYen).toBe(1_000);
+    expect(human.transit.reservation).toBeNull();
   });
 });

@@ -176,4 +176,42 @@ describe("authoritative reconnect room", () => {
     restored.tick(50);
     expect(restored.game.status).toBe("RUNNING");
   });
+
+  it("keeps a reserved fare exactly once across disconnect and reconnect", () => {
+    const { room } = roomFixture();
+    const joined = room.join("connection-1", { type: "JOIN", playerName: "Rail Player" });
+    expect(joined.ok).toBe(true);
+    if (!joined.ok) return;
+    const player = room.game.players.find((candidate) => candidate.id === joined.welcome.playerId);
+    const station = room.game.transitGraph.stations[0];
+    const departure = room.game.transitGraph.timetable.find((candidate) => {
+      const route = room.game.transitGraph.routes.find((item) => item.id === candidate.routeId);
+      return route?.fromStationId === station?.id;
+    });
+    expect(player).toBeDefined();
+    expect(station).toBeDefined();
+    expect(departure).toBeDefined();
+    if (player === undefined || station === undefined || departure === undefined) return;
+    player.position = { ...station.position };
+
+    expect(room.reserveTransit("connection-1", "room-reservation", departure.id)).toMatchObject({
+      accepted: true,
+      code: "RESERVED",
+    });
+    const reservedFare = player.transit.reservedFareYen;
+    room.disconnect("connection-1");
+    const resumed = room.join("connection-2", {
+      type: "JOIN",
+      playerToken: joined.welcome.playerToken,
+      lastAckedEventId: room.game.lastEventId,
+      mapVersion: room.game.mapVersion,
+    });
+    expect(resumed.ok).toBe(true);
+    expect(room.reserveTransit("connection-2", "room-reservation", departure.id)).toMatchObject({
+      accepted: true,
+      code: "ALREADY_RESERVED",
+    });
+    expect(player.transit.reservedFareYen).toBe(reservedFare);
+    expect(player.transit.balanceYen).toBe(1_000);
+  });
 });

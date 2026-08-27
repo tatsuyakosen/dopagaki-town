@@ -2,11 +2,13 @@ import { randomBytes } from "node:crypto";
 import type { ClientMessage, MatchSnapshot, Movement } from "@dopagaki/contracts";
 import {
   acknowledgeMapChecksum,
+  cancelTransit as cancelGameTransit,
   createGame,
   gameCheckpointOf,
   letBotTakeOver,
   markHumanDisconnected,
   replaceBotWithHuman,
+  reserveTransit as reserveGameTransit,
   restoreGame,
   restoreHumanControl,
   snapshotOf,
@@ -14,6 +16,7 @@ import {
   stepGame,
   type GameCheckpoint,
   type GameState,
+  type TransitActionResult,
 } from "@dopagaki/game-core";
 
 type JoinMessage = Extract<ClientMessage, { type: "JOIN" }>;
@@ -259,6 +262,22 @@ export class MatchRoom {
     return accepted;
   }
 
+  reserveTransit(
+    connectionId: string,
+    reservationId: string,
+    departureId: string,
+  ): TransitActionResult | null {
+    const session = this.sessionForConnection(connectionId);
+    if (session === null) return null;
+    return reserveGameTransit(this.game, session.playerId, reservationId, departureId);
+  }
+
+  cancelTransit(connectionId: string, reservationId: string): TransitActionResult | null {
+    const session = this.sessionForConnection(connectionId);
+    if (session === null) return null;
+    return cancelGameTransit(this.game, session.playerId, reservationId);
+  }
+
   tick(deltaMs: number): void {
     this.expireSessions();
     const inputs: Record<string, Movement> = {};
@@ -299,7 +318,7 @@ export class MatchRoom {
 
   checkpoint(): RoomCheckpoint {
     return {
-      version: 1,
+      version: 2,
       capturedAtMs: this.now(),
       seed: this.seed,
       playerSequence: this.playerSequence,
@@ -325,7 +344,7 @@ export class MatchRoom {
     checkpoint: RoomCheckpoint,
     config: MatchRoomConfig,
   ): MatchRoom {
-    if (checkpoint.version !== 1) throw new Error(`Unsupported Room checkpoint v${checkpoint.version}`);
+    if (checkpoint.version !== 2) throw new Error(`Unsupported Room checkpoint v${checkpoint.version}`);
     const room = new MatchRoom(config);
     room.seed = checkpoint.seed;
     room.playerSequence = checkpoint.playerSequence;

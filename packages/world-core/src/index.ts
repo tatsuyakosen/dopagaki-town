@@ -170,14 +170,14 @@ export function createStationMetadata(spec: WorldSpec): StationMetadata[] {
   const last = spec.chunksPerAxis - 3;
   const middle = Math.floor(spec.chunksPerAxis / 2);
   const coordinates: ChunkCoordinate[] = [
-    { x: 2, z: 2 },
+    { x: middle, z: middle - 1 },
     { x: middle, z: 2 },
     { x: last, z: 6 },
     { x: 2, z: last - 2 },
     { x: middle, z: last },
     { x: last, z: last },
   ];
-  const names = ["北西駅", "北駅", "東駅", "西駅", "南駅", "南東駅"];
+  const names = ["大阪", "福島", "天満", "中崎町", "京橋", "西九条"];
   return coordinates.map((coordinate, index) => ({
     id: `station-${index + 1}`,
     name: names[index] ?? `駅${index + 1}`,

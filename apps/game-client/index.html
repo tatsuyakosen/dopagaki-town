@@ -64,9 +64,22 @@
           <ol id="score-list"></ol>
         </aside>
 
+        <aside class="transit-panel glass">
+          <div class="panel-title"><span>RAIL / 交通</span><small id="transit-balance">¥1,000</small></div>
+          <strong id="transit-status">徒歩移動中</strong>
+          <dl>
+            <div><dt>STATION</dt><dd id="transit-station">駅から離れています</dd></div>
+            <div><dt>NEXT</dt><dd id="transit-next">—</dd></div>
+            <div><dt>FARE</dt><dd id="transit-fare">—</dd></div>
+          </dl>
+          <button id="transit-action" type="button" disabled>駅へ移動</button>
+          <small id="transit-message" class="transit-message">Eキーでも操作できます</small>
+        </aside>
+
         <div class="control-hint glass">
           <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動</span>
           <span><kbd>SHIFT</kbd> ダッシュ</span>
+          <span><kbd>E</kbd> 鉄道</span>
           <span id="player-position">X 0.0 / Z 0.0</span>
           <span id="performance-label">FPS -- / MESH --</span>
         </div>

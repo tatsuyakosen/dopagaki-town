@@ -23,7 +23,7 @@
     "test:watch": "vitest",
     "test:headless": "vitest run packages/game-core/test/headless.test.ts",
     "test:e2e": "playwright test",
-    "test:soak:m5": "playwright test --config playwright.soak.config.ts",
+    "test:soak:m6": "playwright test --config playwright.soak.config.ts",
     "verify:local": "npm run lint && npm run typecheck && npm test && npm run build && npm run test:e2e"
   },
   "devDependencies": {

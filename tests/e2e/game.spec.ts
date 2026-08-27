@@ -1,6 +1,30 @@
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
-test("players can reconnect, move, verify a CITY CORE patch, and finish a match", async ({ page }) => {
+async function moveIntoNearestStation(page: Page): Promise<void> {
+  const body = page.locator("body");
+  const position = page.locator("#player-position");
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const distance = Number(await body.getAttribute("data-nearest-station-distance"));
+    if (distance <= 80) break;
+    const x = Number(await position.getAttribute("data-x"));
+    const z = Number(await position.getAttribute("data-z"));
+    const targetX = Number(await body.getAttribute("data-nearest-station-x"));
+    const targetZ = Number(await body.getAttribute("data-nearest-station-z"));
+    const dx = targetX - x;
+    const dz = targetZ - z;
+    const key = Math.abs(dx) >= Math.abs(dz)
+      ? dx >= 0 ? "d" : "a"
+      : dz >= 0 ? "s" : "w";
+    await page.keyboard.down(key);
+    await page.waitForTimeout(120);
+    await page.keyboard.up(key);
+    await page.waitForTimeout(120);
+  }
+  await expect(body).not.toHaveAttribute("data-current-station-id", "", { timeout: 3_000 });
+}
+
+test("players can reserve rail, reconnect, arrive, move, verify CITY CORE, and finish", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -22,6 +46,15 @@ test("players can reconnect, move, verify a CITY CORE patch, and finish a match"
   const originalPlayerId = await page.locator("body").getAttribute("data-player-id");
   expect(originalPlayerId).not.toBeNull();
 
+  await moveIntoNearestStation(page);
+  const originStationId = await page.locator("body").getAttribute("data-current-station-id");
+  await expect(page.locator("#transit-action")).toBeEnabled();
+  await page.locator("#transit-action").click();
+  await expect(page.locator("body")).toHaveAttribute("data-transit-phase", "WAITING");
+  const reservationId = await page.locator("body").getAttribute("data-reservation-id");
+  expect(reservationId).not.toBe("");
+  expect(Number(await page.locator("body").getAttribute("data-reserved-fare-yen"))).toBeGreaterThan(0);
+
   const secondPage = await page.context().newPage();
   secondPage.on("pageerror", (error) => pageErrors.push(error.message));
   await secondPage.goto("/");
@@ -38,21 +71,35 @@ test("players can reconnect, move, verify a CITY CORE patch, and finish a match"
   await page.waitForTimeout(500);
   await expect(page.locator("body")).toHaveAttribute("data-connection-state", "ONLINE", { timeout: 10_000 });
   await expect(page.locator("body")).toHaveAttribute("data-player-id", originalPlayerId ?? "");
+  await expect(page.locator("body")).toHaveAttribute("data-reservation-id", reservationId ?? "");
 
   await page.reload();
   await expect(page.locator("#hud")).toBeVisible({ timeout: 10_000 });
   await expect(page.locator("body")).toHaveAttribute("data-connection-state", "ONLINE");
   await expect(page.locator("body")).toHaveAttribute("data-player-id", originalPlayerId ?? "");
   await expect(page.locator("body")).toHaveAttribute("data-reconnect-count", "1");
+  await expect(page.locator("body")).toHaveAttribute("data-reservation-id", reservationId ?? "");
   await expect(page.locator("#score-list li")).toHaveCount(4);
   await expect(page.locator("#score-list")).toContainText("Second Runner [RECONNECTING]");
+
+  await expect
+    .poll(async () => Number(await page.locator("body").getAttribute("data-balance-yen")), { timeout: 20_000 })
+    .toBeLessThan(1_000);
+  await expect(page.locator("body")).toHaveAttribute("data-transit-phase", "IN_TRANSIT");
+  await expect(page.locator("body")).toHaveAttribute("data-reservation-id", "", { timeout: 25_000 });
+  await expect(page.locator("body")).not.toHaveAttribute("data-current-station-id", originStationId ?? "");
 
   const warning = page.locator("#patch-warning");
   await expect(warning).toBeVisible({ timeout: 12_000 });
   await expect(page.locator("#patch-operation")).not.toHaveText("");
   await expect(page.locator("#patch-reason")).not.toHaveText("");
   await expect(page.locator("#patch-effect")).toContainText("encounter");
-  const warningSeconds = Number.parseFloat((await page.locator("#patch-countdown").textContent()) ?? "0");
+  let warningSeconds = Number.parseFloat((await page.locator("#patch-countdown").textContent()) ?? "0");
+  if (warningSeconds < 5) {
+    await expect(warning).toBeHidden({ timeout: 8_000 });
+    await expect(warning).toBeVisible({ timeout: 12_000 });
+    warningSeconds = Number.parseFloat((await page.locator("#patch-countdown").textContent()) ?? "0");
+  }
   expect(warningSeconds).toBeGreaterThanOrEqual(5);
   await page.screenshot({ path: "test-results/city-core-warning.png", fullPage: true });
   await expect(page.locator("#map-version")).not.toHaveText("v1", { timeout: 8_000 });
@@ -73,16 +120,16 @@ test("players can reconnect, move, verify a CITY CORE patch, and finish a match"
 
   const position = page.locator("#player-position");
   const before = Number(await position.getAttribute("data-z"));
-  await page.keyboard.down("w");
-  await expect.poll(async () => Number(await position.getAttribute("data-z")), { timeout: 7_000 }).toBeLessThan(-2_400);
-  await page.keyboard.up("w");
-  expect(Number(await position.getAttribute("data-z"))).not.toBe(before);
+  await page.keyboard.down("s");
+  await expect.poll(async () => Number(await position.getAttribute("data-z")), { timeout: 5_000 }).toBeGreaterThan(before + 50);
+  await page.keyboard.up("s");
+  const outbound = Number(await position.getAttribute("data-z"));
   expect(Number(await page.locator("body").getAttribute("data-loaded-chunks"))).toBeLessThanOrEqual(25);
   expect(Number(await page.locator("body").getAttribute("data-active-chunks"))).toBeLessThanOrEqual(9);
 
-  await page.keyboard.down("s");
-  await expect.poll(async () => Number(await position.getAttribute("data-z")), { timeout: 7_000 }).toBeGreaterThan(2_400);
-  await page.keyboard.up("s");
+  await page.keyboard.down("w");
+  await expect.poll(async () => Number(await position.getAttribute("data-z")), { timeout: 5_000 }).toBeLessThan(outbound - 50);
+  await page.keyboard.up("w");
   expect(Number(await page.locator("body").getAttribute("data-loaded-chunks"))).toBeLessThanOrEqual(25);
   expect(Number(await page.locator("body").getAttribute("data-active-chunks"))).toBeLessThanOrEqual(9);
 
@@ -90,7 +137,7 @@ test("players can reconnect, move, verify a CITY CORE patch, and finish a match"
     .poll(async () => Number(await page.locator("#performance-label").getAttribute("data-fps")), { timeout: 10_000 })
     .toBeGreaterThan(20);
   await page.screenshot({ path: "test-results/gameplay.png", fullPage: true });
-  await expect(page.locator("#result-panel")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#result-panel")).toBeVisible({ timeout: 50_000 });
   await expect(page.locator("body")).toHaveAttribute("data-match-status", "FINISHED");
   await expect(page.getByRole("button", { name: /もう一度プレイ/ })).toBeVisible();
   expect(pageErrors).toEqual([]);

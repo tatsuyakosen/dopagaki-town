@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MapPatch, Obstacle, PlayerSnapshot } from "@dopagaki/contracts";
+import type { MapPatch, Obstacle, PlayerSnapshot, PlayerTransitState } from "@dopagaki/contracts";
 import {
   DEFAULT_WORLD_SPEC,
   createWorldMetadata,
@@ -12,11 +12,19 @@ import {
 } from "../src/index.js";
 
 function players(): PlayerSnapshot[] {
+  const transit = (): PlayerTransitState => ({
+    phase: "ON_FOOT",
+    balanceYen: 1_000,
+    reservedFareYen: 0,
+    currentStationId: null,
+    reservation: null,
+    arrivalAtMs: null,
+  });
   return [
-    { id: "p1", displayName: "P1", kind: "BOT", strategy: "CHASE", role: "ONI", position: { x: -34, z: 0 }, velocity: { x: 0, z: 0 }, oniDurationMs: 0, protectedUntilMs: 0, connected: true },
-    { id: "p2", displayName: "P2", kind: "BOT", strategy: "CITY_CORE", role: "RUNNER", position: { x: 34, z: 0 }, velocity: { x: 0, z: 0 }, oniDurationMs: 0, protectedUntilMs: 0, connected: true },
-    { id: "p3", displayName: "P3", kind: "BOT", strategy: "RAIL", role: "RUNNER", position: { x: 0, z: -34 }, velocity: { x: 0, z: 0 }, oniDurationMs: 0, protectedUntilMs: 0, connected: true },
-    { id: "p4", displayName: "P4", kind: "BOT", strategy: "CHASE", role: "RUNNER", position: { x: 0, z: 34 }, velocity: { x: 0, z: 0 }, oniDurationMs: 0, protectedUntilMs: 0, connected: true },
+    { id: "p1", displayName: "P1", kind: "BOT", strategy: "CHASE", role: "ONI", position: { x: -34, z: 0 }, velocity: { x: 0, z: 0 }, oniDurationMs: 0, protectedUntilMs: 0, connected: true, transit: transit() },
+    { id: "p2", displayName: "P2", kind: "BOT", strategy: "CITY_CORE", role: "RUNNER", position: { x: 34, z: 0 }, velocity: { x: 0, z: 0 }, oniDurationMs: 0, protectedUntilMs: 0, connected: true, transit: transit() },
+    { id: "p3", displayName: "P3", kind: "BOT", strategy: "RAIL", role: "RUNNER", position: { x: 0, z: -34 }, velocity: { x: 0, z: 0 }, oniDurationMs: 0, protectedUntilMs: 0, connected: true, transit: transit() },
+    { id: "p4", displayName: "P4", kind: "BOT", strategy: "CHASE", role: "RUNNER", position: { x: 0, z: 34 }, velocity: { x: 0, z: 0 }, oniDurationMs: 0, protectedUntilMs: 0, connected: true, transit: transit() },
   ];
 }
 

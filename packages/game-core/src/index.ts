@@ -9,8 +9,11 @@ import {
   type Obstacle,
   type PatchEvaluation,
   type PlayerSnapshot,
+  type TransitDeparture,
+  type TransitRoute,
   type Vec2,
 } from "@dopagaki/contracts";
+import { createFixtureTransitGraph } from "@dopagaki/transit-core";
 import {
   createFixturePatchCandidates,
   createFixtureStageSpec,
@@ -44,6 +47,9 @@ export const TAG_DISTANCE = 3.2;
 export const TAG_PROTECTION_MS = 3_000;
 export const DEFAULT_MATCH_DURATION_MS = 10 * 60 * 1_000;
 export const DEFAULT_PATCH_INTERVAL_MS = 20_000;
+export const INITIAL_BALANCE_YEN = 1_000;
+export const STATION_INTERACTION_RADIUS = 180;
+export const ARRIVAL_PROTECTION_MS = 3_000;
 
 const HUMAN_SPEED = 10.5;
 const BOT_SPEED = 9.4;
@@ -72,6 +78,7 @@ export interface GameState extends MatchSnapshot {
   lastTargetPlayerId: string | null;
   rollbackCheckpoint: RollbackCheckpoint | null;
   cityCoreTagCount: number;
+  processedReservationIds: Set<string>;
 }
 
 export interface RollbackCheckpoint {
@@ -95,6 +102,25 @@ export interface GameCheckpoint {
   lastTargetPlayerId: string | null;
   rollbackCheckpoint: RollbackCheckpoint | null;
   cityCoreTagCount: number;
+  processedReservationIds: string[];
+}
+
+export type TransitActionCode =
+  | "RESERVED"
+  | "ALREADY_RESERVED"
+  | "CANCELLED"
+  | "PLAYER_NOT_FOUND"
+  | "INVALID_DEPARTURE"
+  | "DUPLICATE_RESERVATION"
+  | "INVALID_STATE"
+  | "NOT_AT_STATION"
+  | "INSUFFICIENT_BALANCE"
+  | "MISSED_DEPARTURE";
+
+export interface TransitActionResult {
+  accepted: boolean;
+  code: TransitActionCode;
+  message: string;
 }
 
 type Inputs = Readonly<Record<string, Movement | undefined>>;
@@ -190,6 +216,14 @@ function spawnPlayer(
     oniDurationMs: 0,
     protectedUntilMs: 0,
     connected: true,
+    transit: {
+      phase: "ON_FOOT",
+      balanceYen: INITIAL_BALANCE_YEN,
+      reservedFareYen: 0,
+      currentStationId: null,
+      reservation: null,
+      arrivalAtMs: null,
+    },
   };
 }
 
@@ -227,6 +261,8 @@ export function createGame(config: GameConfig): GameState {
     throw new Error("CITY CORE requires at least one mutation anchor");
   }
   const patchIntervalMs = Math.max(6_000, config.patchIntervalMs ?? DEFAULT_PATCH_INTERVAL_MS);
+  const durationMs = config.durationMs ?? DEFAULT_MATCH_DURATION_MS;
+  const transitGraph = createFixtureTransitGraph(config.seed, worldMetadata.stations, durationMs);
   const dynamicObstacles = [
     ...BARRIER_ANCHORS.map((barrier) => ({ ...barrier })),
     ...ALLEY_GATE_ANCHORS.map((gate) => ({ ...gate })),
@@ -257,7 +293,7 @@ export function createGame(config: GameConfig): GameState {
     nowMs: 0,
     startedAtMs: null,
     endsAtMs: null,
-    remainingMs: config.durationMs ?? DEFAULT_MATCH_DURATION_MS,
+    remainingMs: durationMs,
     mapVersion: 1,
     lastEventId: 0,
     lastEventText: "入場者を待っています",
@@ -268,6 +304,7 @@ export function createGame(config: GameConfig): GameState {
     mapChecksum,
     rollbackCount: 0,
     aiReplay,
+    transitGraph,
     players,
     obstacles: dynamicObstacles,
     cityCore: {
@@ -283,7 +320,7 @@ export function createGame(config: GameConfig): GameState {
       activePatch: null,
       lastAppliedPatchId: null,
     },
-    durationMs: config.durationMs ?? DEFAULT_MATCH_DURATION_MS,
+    durationMs,
     patchIntervalMs,
     humanSpeedMultiplier: config.humanSpeedMultiplier ?? 1,
     worldMetadata,
@@ -298,6 +335,7 @@ export function createGame(config: GameConfig): GameState {
     lastTargetPlayerId: null,
     rollbackCheckpoint: null,
     cityCoreTagCount: 0,
+    processedReservationIds: new Set(),
   };
 }
 
@@ -428,7 +466,11 @@ function runnerRoadGoal(state: GameState, player: PlayerSnapshot, oni: PlayerSna
     return state.cityCore.target;
   }
   if (player.strategy === "RAIL") {
-    return player.position.z <= 0 ? { x: 0, z: 2_250 } : { x: 0, z: -2_250 };
+    const reservation = player.transit.reservation;
+    const station = reservation === null
+      ? nearestTransitStation(state, player.position)
+      : stationById(state, reservation.fromStationId);
+    return station?.position ?? player.position;
   }
 
   const idBias = [...player.id].reduce((sum, character) => sum + character.charCodeAt(0), 0) % 7;
@@ -447,6 +489,13 @@ function runnerRoadGoal(state: GameState, player: PlayerSnapshot, oni: PlayerSna
 }
 
 function botMovement(state: GameState, player: PlayerSnapshot): Movement {
+  if (player.transit.phase === "WAITING" && player.transit.reservation !== null) {
+    const station = stationById(state, player.transit.reservation.fromStationId);
+    const direction = station === undefined
+      ? { x: 0, z: 0 }
+      : directionToRoadGoal(state, player, station.position);
+    return { ...direction, sprint: false };
+  }
   const oni = state.players.find((candidate) => candidate.role === "ONI");
   if (oni === undefined) return { x: 0, z: 0, sprint: false };
 
@@ -485,6 +534,10 @@ function collides(state: GameState, x: number, z: number): boolean {
 }
 
 function movePlayer(state: GameState, player: PlayerSnapshot, movement: Movement, deltaMs: number): void {
+  if (player.transit.phase === "IN_TRANSIT" || player.transit.phase === "ARRIVING") {
+    player.velocity = { x: 0, z: 0 };
+    return;
+  }
   const direction = normalized(movement);
   const baseSpeed = player.kind === "HUMAN" ? HUMAN_SPEED : BOT_SPEED;
   const humanMultiplier = player.kind === "HUMAN" ? state.humanSpeedMultiplier : 1;
@@ -542,6 +595,257 @@ function appendReplay(
     sequence: state.aiReplay.length,
     atMs: state.nowMs,
   });
+}
+
+function routeForDeparture(
+  state: GameState,
+  departure: TransitDeparture,
+): TransitRoute | undefined {
+  return state.transitGraph.routes.find((route) => route.id === departure.routeId);
+}
+
+function stationById(state: GameState, stationId: string): GameState["transitGraph"]["stations"][number] | undefined {
+  return state.transitGraph.stations.find((station) => station.id === stationId);
+}
+
+function nearestTransitStation(state: GameState, position: Vec2) {
+  return state.transitGraph.stations.reduce<GameState["transitGraph"]["stations"][number] | undefined>(
+    (nearest, station) => {
+      if (nearest === undefined) return station;
+      return distance(position, station.position) < distance(position, nearest.position) ? station : nearest;
+    },
+    undefined,
+  );
+}
+
+function recordTransitReplay(
+  state: GameState,
+  phase: Extract<AIReplayEntry["phase"], `TRANSIT_${string}`>,
+  summary: string,
+): void {
+  appendReplay(state, {
+    phase,
+    patchId: null,
+    selectedPatchId: null,
+    summary,
+    candidates: [],
+    latencyMs: 0,
+    estimatedCostYen: 0,
+  });
+}
+
+function rejectTransit(
+  state: GameState,
+  player: PlayerSnapshot | undefined,
+  reservationId: string,
+  code: Exclude<TransitActionCode, "RESERVED" | "ALREADY_RESERVED" | "CANCELLED">,
+  message: string,
+): TransitActionResult {
+  if (player !== undefined) state.processedReservationIds.add(reservationId);
+  recordTransitReplay(state, "TRANSIT_REJECTED", `${player?.displayName ?? "Unknown"}: ${message}`);
+  return { accepted: false, code, message };
+}
+
+export function reserveTransit(
+  state: GameState,
+  playerId: string,
+  reservationId: string,
+  departureId: string,
+): TransitActionResult {
+  const player = state.players.find((candidate) => candidate.id === playerId);
+  if (player === undefined) {
+    return rejectTransit(state, player, reservationId, "PLAYER_NOT_FOUND", "プレイヤーが見つかりません");
+  }
+  const active = player.transit.reservation;
+  if (
+    active?.reservationId === reservationId &&
+    active.departureId === departureId &&
+    player.transit.phase === "WAITING"
+  ) {
+    return { accepted: true, code: "ALREADY_RESERVED", message: "予約済みです" };
+  }
+  if (state.processedReservationIds.has(reservationId) || active !== null) {
+    return rejectTransit(state, player, reservationId, "DUPLICATE_RESERVATION", "予約IDは使用済みです");
+  }
+  if (player.transit.phase !== "ON_FOOT") {
+    return rejectTransit(state, player, reservationId, "INVALID_STATE", "現在の交通状態では予約できません");
+  }
+
+  const departure = state.transitGraph.timetable.find((candidate) => candidate.id === departureId);
+  const route = departure === undefined ? undefined : routeForDeparture(state, departure);
+  if (departure === undefined || route === undefined) {
+    return rejectTransit(state, player, reservationId, "INVALID_DEPARTURE", "便が見つかりません");
+  }
+  if (departure.departureAtMs <= state.nowMs) {
+    return rejectTransit(state, player, reservationId, "MISSED_DEPARTURE", "この便は発車済みです");
+  }
+  const station = stationById(state, route.fromStationId);
+  if (station === undefined || distance(player.position, station.position) > STATION_INTERACTION_RADIUS) {
+    return rejectTransit(state, player, reservationId, "NOT_AT_STATION", "出発駅の近くで予約してください");
+  }
+  if (player.transit.balanceYen - player.transit.reservedFareYen < route.fareYen) {
+    return rejectTransit(state, player, reservationId, "INSUFFICIENT_BALANCE", "残高が不足しています");
+  }
+
+  player.transit.phase = "WAITING";
+  player.transit.currentStationId = station.id;
+  player.transit.reservedFareYen = route.fareYen;
+  player.transit.reservation = {
+    reservationId,
+    departureId,
+    routeId: route.id,
+    fromStationId: route.fromStationId,
+    toStationId: route.toStationId,
+    fareYen: route.fareYen,
+    status: "RESERVED",
+    reservedAtMs: state.nowMs,
+    departureAtMs: departure.departureAtMs,
+    arrivalAtMs: departure.arrivalAtMs,
+  };
+  state.botGoalCache.delete(player.id);
+  state.lastEventId += 1;
+  state.lastEventText = `${player.displayName} が${station.name}発を予約`;
+  recordTransitReplay(state, "TRANSIT_RESERVED", `${player.displayName}: ${route.id} / ¥${route.fareYen}`);
+  return { accepted: true, code: "RESERVED", message: "予約しました" };
+}
+
+export function cancelTransit(
+  state: GameState,
+  playerId: string,
+  reservationId: string,
+): TransitActionResult {
+  const player = state.players.find((candidate) => candidate.id === playerId);
+  if (player === undefined) {
+    return rejectTransit(state, player, reservationId, "PLAYER_NOT_FOUND", "プレイヤーが見つかりません");
+  }
+  const reservation = player.transit.reservation;
+  if (
+    reservation === null ||
+    reservation.reservationId !== reservationId ||
+    reservation.status !== "RESERVED" ||
+    player.transit.phase !== "WAITING"
+  ) {
+    const code = state.processedReservationIds.has(reservationId)
+      ? "DUPLICATE_RESERVATION"
+      : "INVALID_STATE";
+    return rejectTransit(state, player, reservationId, code, "取消できる予約がありません");
+  }
+
+  state.processedReservationIds.add(reservationId);
+  player.transit.phase = "ON_FOOT";
+  player.transit.reservedFareYen = 0;
+  player.transit.reservation = null;
+  player.transit.arrivalAtMs = null;
+  state.lastEventId += 1;
+  state.lastEventText = `${player.displayName} が予約を取消`;
+  recordTransitReplay(state, "TRANSIT_CANCELLED", `${player.displayName}: ${reservation.routeId}`);
+  return { accepted: true, code: "CANCELLED", message: "予約を取り消しました" };
+}
+
+function missTransitDeparture(state: GameState, player: PlayerSnapshot, reason: string): void {
+  const reservation = player.transit.reservation;
+  if (reservation !== null) state.processedReservationIds.add(reservation.reservationId);
+  player.transit.phase = "ON_FOOT";
+  player.transit.reservedFareYen = 0;
+  player.transit.reservation = null;
+  player.transit.arrivalAtMs = null;
+  state.lastEventId += 1;
+  state.lastEventText = `${player.displayName} は乗車できませんでした`;
+  recordTransitReplay(state, "TRANSIT_REJECTED", `${player.displayName}: ${reason}`);
+}
+
+function updateTransitState(state: GameState): void {
+  for (const player of state.players) {
+    const transit = player.transit;
+    if (transit.phase === "ARRIVING" && state.nowMs >= player.protectedUntilMs) {
+      transit.phase = "ON_FOOT";
+    }
+
+    if (transit.phase === "WAITING") {
+      const reservation = transit.reservation;
+      if (reservation === null) {
+        transit.phase = "ON_FOOT";
+        transit.reservedFareYen = 0;
+      } else if (state.nowMs >= reservation.departureAtMs) {
+        const station = stationById(state, reservation.fromStationId);
+        if (station === undefined || distance(player.position, station.position) > STATION_INTERACTION_RADIUS) {
+          missTransitDeparture(state, player, "出発時に駅構内にいないため予約を解除");
+        } else if (transit.balanceYen < reservation.fareYen) {
+          missTransitDeparture(state, player, "乗車確定時の残高不足");
+        } else {
+          transit.balanceYen -= reservation.fareYen;
+          transit.reservedFareYen = 0;
+          transit.phase = "IN_TRANSIT";
+          transit.arrivalAtMs = reservation.arrivalAtMs;
+          reservation.status = "COMMITTED";
+          state.processedReservationIds.add(reservation.reservationId);
+          player.velocity = { x: 0, z: 0 };
+          state.lastEventId += 1;
+          state.lastEventText = `${player.displayName} が乗車（¥${reservation.fareYen}）`;
+          recordTransitReplay(state, "TRANSIT_BOARDED", `${player.displayName}: ${reservation.routeId}`);
+        }
+      }
+    }
+
+    if (transit.phase === "IN_TRANSIT") {
+      const reservation = transit.reservation;
+      if (reservation !== null && state.nowMs >= reservation.arrivalAtMs) {
+        const destination = stationById(state, reservation.toStationId);
+        if (destination !== undefined) {
+          player.position = { x: destination.position.x, z: destination.position.z + 28 };
+          transit.currentStationId = destination.id;
+        }
+        transit.phase = "ARRIVING";
+        transit.arrivalAtMs = null;
+        transit.reservation = null;
+        player.protectedUntilMs = Math.max(player.protectedUntilMs, state.nowMs + ARRIVAL_PROTECTION_MS);
+        player.velocity = { x: 0, z: 0 };
+        state.botGoalCache.delete(player.id);
+        state.lastEventId += 1;
+        state.lastEventText = `${player.displayName} が${destination?.name ?? "目的駅"}へ到着`;
+        recordTransitReplay(state, "TRANSIT_ARRIVED", `${player.displayName}: ${destination?.id ?? "unknown"}`);
+      }
+    }
+
+    if (transit.phase === "ON_FOOT" || transit.phase === "WAITING") {
+      const nearest = nearestTransitStation(state, player.position);
+      transit.currentStationId = nearest !== undefined && distance(player.position, nearest.position) <= STATION_INTERACTION_RADIUS
+        ? nearest.id
+        : null;
+    }
+  }
+}
+
+function tryReserveRailBot(state: GameState, player: PlayerSnapshot): void {
+  if (
+    player.kind !== "BOT" ||
+    player.strategy !== "RAIL" ||
+    player.role !== "RUNNER" ||
+    player.transit.phase !== "ON_FOOT" ||
+    player.transit.reservation !== null
+  ) return;
+  const station = nearestTransitStation(state, player.position);
+  if (station === undefined || distance(player.position, station.position) > STATION_INTERACTION_RADIUS) return;
+
+  const candidate = state.transitGraph.timetable
+    .filter((departure) => departure.departureAtMs >= state.nowMs + 1_000)
+    .map((departure) => ({ departure, route: routeForDeparture(state, departure) }))
+    .filter((item): item is { departure: TransitDeparture; route: TransitRoute } =>
+      item.route !== undefined && item.route.fromStationId === station.id)
+    .filter(({ departure, route }) => {
+      const destination = stationById(state, route.toStationId);
+      if (destination === undefined || route.fareYen > player.transit.balanceYen) return false;
+      const walkMs = distance(player.position, destination.position) / BOT_SPEED * 1_000;
+      return departure.arrivalAtMs - state.nowMs < walkMs;
+    })
+    .sort((left, right) => left.departure.departureAtMs - right.departure.departureAtMs)[0];
+  if (candidate === undefined) return;
+  reserveTransit(
+    state,
+    player.id,
+    `rail-${player.id}-${candidate.departure.id}`,
+    candidate.departure.id,
+  );
 }
 
 function upsertObstacle(state: GameState, obstacle: Obstacle): void {
@@ -719,10 +1023,13 @@ function applyTag(state: GameState): void {
   const oni = state.players.find((player) => player.role === "ONI");
   if (oni === undefined) return;
   if (oni.kind === "HUMAN" && !oni.connected) return;
+  if (oni.transit.phase === "IN_TRANSIT" || oni.transit.phase === "ARRIVING") return;
   const target = state.players.find(
     (player) =>
       player.role === "RUNNER" &&
       (player.kind === "BOT" || player.connected) &&
+      player.transit.phase !== "IN_TRANSIT" &&
+      player.transit.phase !== "ARRIVING" &&
       state.nowMs >= player.protectedUntilMs &&
       distance(oni.position, player.position) <= TAG_DISTANCE,
   );
@@ -774,10 +1081,14 @@ export function stepGame(state: GameState, inputs: Inputs, deltaMs: number): voi
   const oniBeforeMovement = state.players.find((player) => player.role === "ONI");
   if (oniBeforeMovement !== undefined) oniBeforeMovement.oniDurationMs += appliedDeltaMs;
 
+  updateTransitState(state);
+
   for (const player of state.players) {
     const movement = player.kind === "BOT" ? botMovement(state, player) : inputs[player.id];
     movePlayer(state, player, movement ?? { x: 0, z: 0, sprint: false }, appliedDeltaMs);
   }
+  updateTransitState(state);
+  for (const player of state.players) tryReserveRailBot(state, player);
 
   updateCityCore(state, appliedDeltaMs);
   applyTag(state);
@@ -808,10 +1119,12 @@ export function snapshotOf(state: GameState): MatchSnapshot {
     mapChecksum: state.mapChecksum,
     rollbackCount: state.rollbackCount,
     aiReplay: structuredClone(state.aiReplay),
+    transitGraph: structuredClone(state.transitGraph),
     players: state.players.map((player) => ({
       ...player,
       position: { ...player.position },
       velocity: { ...player.velocity },
+      transit: structuredClone(player.transit),
     })),
     obstacles: state.obstacles.map((obstacle) => ({ ...obstacle })),
     cityCore: {
@@ -845,6 +1158,7 @@ export function gameCheckpointOf(state: GameState): GameCheckpoint {
       ? null
       : structuredClone(state.rollbackCheckpoint),
     cityCoreTagCount: state.cityCoreTagCount,
+    processedReservationIds: [...state.processedReservationIds],
   };
 }
 
@@ -886,6 +1200,7 @@ export function restoreGame(checkpoint: GameCheckpoint): GameState {
     ? null
     : structuredClone(checkpoint.rollbackCheckpoint);
   state.cityCoreTagCount = checkpoint.cityCoreTagCount;
+  state.processedReservationIds = new Set(checkpoint.processedReservationIds);
   return state;
 }
 

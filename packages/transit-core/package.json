@@ -1,13 +1,11 @@
 {
-  "name": "@dopagaki/game-core",
+  "name": "@dopagaki/transit-core",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
     "@dopagaki/contracts": "*",
-    "@dopagaki/transit-core": "*",
-    "@dopagaki/verifier": "*",
     "@dopagaki/world-core": "*"
   }
 }

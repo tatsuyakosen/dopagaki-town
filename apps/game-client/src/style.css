@@ -214,6 +214,17 @@ body[data-match-status="RUNNING"] #connection-dot {
 .score-panel li.oni .name { color: var(--danger); font-weight: 800; }
 .score-panel li.local .name::after { content: " YOU"; margin-left: 5px; color: var(--mint); font-size: 7px; }
 
+.transit-panel { position: absolute; right: 27px; top: 326px; width: 265px; padding: 15px 17px; pointer-events: auto; border-top: 2px solid #45d9ff; }
+.transit-panel > strong { display: block; margin-top: 12px; color: #bfefff; font-size: 12px; letter-spacing: .04em; }
+.transit-panel dl { margin: 11px 0; }
+.transit-panel dl > div { display: grid; grid-template-columns: 55px 1fr; gap: 8px; padding: 5px 0; border-top: 1px solid rgba(255,255,255,.06); }
+.transit-panel dt { color: #5f7971; font-size: 8px; letter-spacing: .1em; }
+.transit-panel dd { margin: 0; color: #d2e9e2; font-size: 9px; text-align: right; }
+#transit-balance { color: var(--mint); font-size: 11px; }
+#transit-action { width: 100%; padding: 9px 10px; border: 1px solid rgba(69,217,255,.45); color: #04100c; background: #45d9ff; font-weight: 800; font-size: 10px; }
+#transit-action:disabled { cursor: default; color: #6f8a83; background: rgba(255,255,255,.04); border-color: rgba(255,255,255,.1); }
+.transit-message { display: block; min-height: 13px; margin-top: 8px; color: #78958c; font-size: 8px; line-height: 1.5; }
+
 .control-hint { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 19px; padding: 10px 14px; color: #8fa69f; font-size: 9px; }
 kbd { display: inline-grid; min-width: 20px; height: 20px; margin-right: 3px; place-items: center; color: #d9ede6; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.07); font: 700 9px Inter; }
 
@@ -235,6 +246,7 @@ kbd { display: inline-grid; min-width: 20px; height: 20px; margin-right: 3px; pl
   .match-strip > div:nth-last-child(-n+2) { display: none; }
   .event-panel { top: 136px; left: 12px; width: 220px; }
   .score-panel { right: 12px; top: 136px; width: 180px; }
+  .transit-panel { right: 12px; top: 326px; width: 180px; }
   .control-hint { bottom: 12px; width: calc(100% - 24px); justify-content: center; }
   .control-hint span:nth-child(2) { display: none; }
 }

@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  timeout: 60_000,
+  timeout: 120_000,
   fullyParallel: false,
   use: {
     baseURL: "http://127.0.0.1:5177",
@@ -14,7 +14,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "PORT=3104 MATCH_DURATION_MS=40000 PATCH_INTERVAL_MS=15000 HUMAN_SPEED_MULTIPLIER=100 npm run dev:server",
+      command: "PORT=3104 MATCH_DURATION_MS=75000 PATCH_INTERVAL_MS=15000 HUMAN_SPEED_MULTIPLIER=100 npm run dev:server",
       url: "http://127.0.0.1:3104/health",
       reuseExistingServer: false,
       timeout: 30_000

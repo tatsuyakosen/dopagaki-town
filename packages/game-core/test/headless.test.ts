@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { chunkAtPosition, chunkId, pointCollides } from "@dopagaki/world-core";
 import { checksumOf, createGame, replaceBotWithHuman, startGame, stepGame } from "../src/index.js";
 
-function runSeed(seed: number): { checksum: string; roleCount: number; oniTime: number; mapVersion: number } {
+function runSeed(seed: number): { checksum: string; roleCount: number; oniTime: number; mapVersion: number; minimumBalance: number } {
   const game = createGame({ seed, durationMs: 10_000, patchIntervalMs: 2_500 });
   startGame(game);
   while (game.status === "RUNNING") stepGame(game, {}, 50);
@@ -11,6 +11,7 @@ function runSeed(seed: number): { checksum: string; roleCount: number; oniTime: 
     roleCount: game.players.filter((player) => player.role === "ONI").length,
     oniTime: game.players.reduce((sum, player) => sum + player.oniDurationMs, 0),
     mapVersion: game.mapVersion,
+    minimumBalance: Math.min(...game.players.map((player) => player.transit.balanceYen)),
   };
 }
 
@@ -23,6 +24,7 @@ describe("100-seed headless gate", () => {
       expect(first.roleCount, `seed ${seed} oni count`).toBe(1);
       expect(first.oniTime, `seed ${seed} oni time`).toBe(10_000);
       expect(first.mapVersion, `seed ${seed} CITY CORE patches`).toBeGreaterThan(1);
+      expect(first.minimumBalance, `seed ${seed} nonnegative balance`).toBeGreaterThanOrEqual(0);
     }
   }, 30_000);
 
@@ -48,7 +50,15 @@ describe("100-seed headless gate", () => {
     expect(game.nowMs).toBe(600_000);
     expect(game.mapVersion).toBeGreaterThan(20);
     expect(game.players.filter((player) => player.role === "ONI")).toHaveLength(1);
-  });
+    expect(
+      game.aiReplay.some((entry) => entry.phase === "TRANSIT_BOARDED"),
+      JSON.stringify({
+        rail: game.players.find((player) => player.strategy === "RAIL"),
+        transitReplay: game.aiReplay.filter((entry) => entry.phase.startsWith("TRANSIT_")),
+      }),
+    ).toBe(true);
+    expect(Math.min(...game.players.map((player) => player.transit.balanceYen))).toBeGreaterThanOrEqual(0);
+  }, 10_000);
 
   it("moves from one 5km edge to the other and back without boundary drift", () => {
     const game = createGame({
