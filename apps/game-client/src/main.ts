@@ -458,14 +458,24 @@ let inputSequence = 0;
 let lastEventId = -1;
 let lastScoreboardUpdateAt = Number.NEGATIVE_INFINITY;
 let enteredName = "Runner";
+let connectionTimeoutId: number | null = null;
 const keys = new Set<string>();
 
 function socketUrl(): string {
   const configured = import.meta.env.VITE_MATCH_WS_URL as string | undefined;
   if (configured !== undefined && configured.length > 0) return configured;
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  if (location.port === "5173") return `${protocol}//${location.hostname}:3001/ws`;
+  if (import.meta.env.DEV) {
+    const matchServerPort = String(import.meta.env.VITE_MATCH_PORT ?? "3001");
+    return `${protocol}//${location.hostname}:${matchServerPort}/ws`;
+  }
   return `${protocol}//${location.host}/ws`;
+}
+
+function clearConnectionTimeout(): void {
+  if (connectionTimeoutId === null) return;
+  window.clearTimeout(connectionTimeoutId);
+  connectionTimeoutId = null;
 }
 
 function sendMessage(message: ClientMessage): void {
@@ -473,15 +483,25 @@ function sendMessage(message: ClientMessage): void {
 }
 
 function connect(): void {
+  clearConnectionTimeout();
+  socket?.close();
   entryError.textContent = "";
   enterButton.disabled = true;
   connectionLabel.textContent = "CONNECTING";
-  socket = new WebSocket(socketUrl());
-  socket.addEventListener("open", () => {
+  const currentSocket = new WebSocket(socketUrl());
+  socket = currentSocket;
+  connectionTimeoutId = window.setTimeout(() => {
+    if (socket !== currentSocket || localPlayerId !== null || entryPanel.hidden) return;
+    currentSocket.close();
+    connectionLabel.textContent = "SERVER OFFLINE";
+    entryError.textContent = "Match Serverへ接続できません。npm run dev を確認してください。";
+    enterButton.disabled = false;
+  }, 5_000);
+  currentSocket.addEventListener("open", () => {
     connectionLabel.textContent = "MATCH SERVER ONLINE";
     sendMessage({ type: "JOIN", playerName: enteredName });
   });
-  socket.addEventListener("message", (event) => {
+  currentSocket.addEventListener("message", (event) => {
     let decoded: unknown;
     try {
       decoded = JSON.parse(String(event.data));
@@ -491,6 +511,7 @@ function connect(): void {
     const parsed = ServerMessageSchema.safeParse(decoded);
     if (!parsed.success) return;
     if (parsed.data.type === "WELCOME") {
+      clearConnectionTimeout();
       localPlayerId = parsed.data.playerId;
       entryPanel.hidden = true;
       hud.hidden = false;
@@ -503,7 +524,10 @@ function connect(): void {
       enterButton.disabled = false;
     }
   });
-  socket.addEventListener("close", () => {
+  currentSocket.addEventListener("close", () => {
+    if (socket !== currentSocket) return;
+    socket = null;
+    clearConnectionTimeout();
     connectionLabel.textContent = "SERVER OFFLINE";
     document.body.dataset.matchStatus = "DISCONNECTED";
     if (!entryPanel.hidden) {
@@ -511,7 +535,7 @@ function connect(): void {
       enterButton.disabled = false;
     }
   });
-  socket.addEventListener("error", () => socket?.close());
+  currentSocket.addEventListener("error", () => currentSocket.close());
 }
 
 function formatTime(milliseconds: number): string {

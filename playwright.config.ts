@@ -20,7 +20,7 @@ export default defineConfig({
       timeout: 30_000
     },
     {
-      command: "VITE_MATCH_WS_URL=ws://127.0.0.1:3101/ws npm run dev:client -- --host 127.0.0.1 --port 5174",
+      command: "VITE_MATCH_PORT=3101 npm run dev:client -- --host 127.0.0.1 --port 5174",
       url: "http://127.0.0.1:5174",
       reuseExistingServer: false,
       timeout: 30_000
