@@ -2,7 +2,7 @@
 
 PLAYER vs PLAYER vs CITY — 街そのものが試合へ介入する、ローカルファーストのマルチプレイヤー鬼ごっこです。
 
-現在の縦切りMVPでは、ブラウザから1人で入場するとRival Botが3体補充されます。Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確定し、CITY COREは予告後に道路障害物を切り替えます。
+現在のM2縦切りでは、500m×500mの3×3低ポリ街区へブラウザから1人で入場するとRival Botが3体補充されます。Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確定し、CITY COREは予告隆起後に道路障害物を切り替えます。Botは5×5交差点の道路グラフをA*で移動し、改築後は閉鎖edgeを避けて再経路選択します。
 
 ## 必要環境
 
@@ -45,6 +45,12 @@ npm run test:e2e
 npm run verify:local
 ```
 
+500m LOWプリセットを実時間10分間動かすM2 soak:
+
+```bash
+npm run test:soak:m2
+```
+
 E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動し、システムのGoogle ChromeをHeadlessで操作します。
 
 ## 構成
@@ -55,6 +61,7 @@ apps/match-server      authoritative WebSocket Match Server
 packages/contracts     ZodによるRuntime Schema
 packages/game-core     決定論的なゲームルールとBot
 tests/e2e              ブラウザ操作の受入テスト
+tests/soak             500m街区の実時間10分性能試験
 ```
 
 ローカルMVPを外部サービスから独立させるため、AI、鉄道、永続化は今後adapterとして追加します。

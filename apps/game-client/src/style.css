@@ -1,7 +1,7 @@
 :root {
   color: #eefbf6;
   background: #071012;
-  font-family: "Inter", "Noto Sans JP", sans-serif;
+  font-family: Inter, "Noto Sans JP", system-ui, sans-serif;
   font-synthesis: none;
   --mint: #59f5bd;
   --mint-dim: #1b9574;
@@ -136,7 +136,7 @@ body[data-match-status="RUNNING"] #connection-dot {
 
 .entry-panel h1 {
   margin: 18px 0 16px;
-  font-family: "Noto Sans JP", sans-serif;
+  font-family: "Noto Sans JP", system-ui, sans-serif;
   font-size: clamp(44px, 6vw, 77px);
   line-height: .98;
   letter-spacing: -.07em;
@@ -229,10 +229,9 @@ kbd { display: inline-grid; min-width: 20px; height: 20px; margin-right: 3px; pl
   .entry-meta { gap: 8px 14px; }
   .match-strip { top: 70px; width: calc(100% - 24px); }
   .match-strip > div { min-width: 0; flex: 1; padding: 9px 8px; }
-  .match-strip > div:last-child { display: none; }
+  .match-strip > div:nth-last-child(-n+2) { display: none; }
   .event-panel { top: 136px; left: 12px; width: 220px; }
   .score-panel { right: 12px; top: 136px; width: 180px; }
   .control-hint { bottom: 12px; width: calc(100% - 24px); justify-content: center; }
   .control-hint span:nth-child(2) { display: none; }
 }
-

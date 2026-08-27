@@ -5,7 +5,7 @@ export default defineConfig({
   timeout: 60_000,
   fullyParallel: false,
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: "http://127.0.0.1:5174",
     headless: true,
     launchOptions: {
       executablePath: "/usr/bin/google-chrome",
@@ -14,14 +14,14 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "MATCH_DURATION_MS=12000 PATCH_INTERVAL_MS=3000 npm run dev:server",
-      url: "http://127.0.0.1:3001/health",
+      command: "PORT=3101 MATCH_DURATION_MS=20000 PATCH_INTERVAL_MS=4000 npm run dev:server",
+      url: "http://127.0.0.1:3101/health",
       reuseExistingServer: false,
       timeout: 30_000
     },
     {
-      command: "npm run dev:client -- --host 127.0.0.1",
-      url: "http://127.0.0.1:5173",
+      command: "VITE_MATCH_WS_URL=ws://127.0.0.1:3101/ws npm run dev:client -- --host 127.0.0.1 --port 5174",
+      url: "http://127.0.0.1:5174",
       reuseExistingServer: false,
       timeout: 30_000
     }

@@ -6,8 +6,19 @@ import type {
   PlayerSnapshot,
   Vec2,
 } from "@dopagaki/contracts";
+import {
+  DEFAULT_WORLD_SPEC,
+  createCityObstacles,
+  createRoadGraph,
+  distanceBetween,
+  findRoadPath,
+  nearestRoadNode,
+  pointCollides,
+  segmentIsClear,
+  type RoadNode,
+} from "@dopagaki/world-core";
 
-export const WORLD_HALF_SIZE = 82;
+export const WORLD_HALF_SIZE = DEFAULT_WORLD_SPEC.halfSize;
 export const PLAYER_RADIUS = 1.35;
 export const TAG_DISTANCE = 3.2;
 export const TAG_PROTECTION_MS = 3_000;
@@ -15,7 +26,8 @@ export const DEFAULT_MATCH_DURATION_MS = 10 * 60 * 1_000;
 export const DEFAULT_PATCH_INTERVAL_MS = 20_000;
 
 const HUMAN_SPEED = 10.5;
-const BOT_SPEED = 8.4;
+const BOT_SPEED = 9.4;
+const ROAD_GRAPH = createRoadGraph(DEFAULT_WORLD_SPEC);
 
 export interface GameConfig {
   seed: number;
@@ -47,98 +59,45 @@ class SeededRandom {
   }
 }
 
-function createBuildings(): Obstacle[] {
-  const blocks: Array<[string, number, number, number, number, number]> = [
-    ["northwest", -56, -55, 25, 28, 16],
-    ["north", 0, -57, 32, 23, 22],
-    ["northeast", 55, -55, 26, 28, 13],
-    ["west", -57, 0, 23, 30, 18],
-    ["east", 57, 0, 23, 30, 24],
-    ["southwest", -55, 55, 28, 25, 20],
-    ["south", 0, 57, 34, 22, 15],
-    ["southeast", 56, 55, 25, 27, 19],
-    ["inner-nw", -26, -25, 14, 13, 9],
-    ["inner-ne", 26, -25, 14, 13, 12],
-    ["inner-sw", -26, 26, 14, 14, 11],
-    ["inner-se", 26, 26, 14, 14, 14],
-  ];
-
-  const buildings: Obstacle[] = blocks.map(([id, x, z, width, depth, height]) => ({
-    id: `building-${id}`,
-    kind: "BUILDING" as const,
-    x,
-    z,
-    width,
-    depth,
-    height,
-    active: true,
-  }));
-
-  buildings.push(
-    {
-      id: "station-kita",
-      kind: "STATION",
-      x: 0,
-      z: -77,
-      width: 18,
-      depth: 5,
-      height: 5,
-      active: true,
-    },
-    {
-      id: "station-minami",
-      kind: "STATION",
-      x: 0,
-      z: 77,
-      width: 18,
-      depth: 5,
-      height: 5,
-      active: true,
-    },
-  );
-
-  return buildings;
-}
-
 const BARRIER_ANCHORS: ReadonlyArray<Obstacle> = [
   {
     id: "barrier-0",
     kind: "BARRIER",
-    x: 0,
-    z: -17,
-    width: 18,
-    depth: 2.5,
-    height: 5,
+    x: -50,
+    z: 0,
+    width: 3,
+    depth: 22,
+    height: 7,
     active: false,
   },
   {
     id: "barrier-1",
     kind: "BARRIER",
-    x: 17,
+    x: 50,
     z: 0,
-    width: 2.5,
-    depth: 18,
-    height: 5,
+    width: 3,
+    depth: 22,
+    height: 7,
     active: false,
   },
   {
     id: "barrier-2",
     kind: "BARRIER",
     x: 0,
-    z: 17,
-    width: 18,
-    depth: 2.5,
-    height: 5,
+    z: -50,
+    width: 22,
+    depth: 3,
+    height: 7,
     active: false,
   },
   {
     id: "barrier-3",
     kind: "BARRIER",
-    x: -17,
-    z: 0,
-    width: 2.5,
-    depth: 18,
-    height: 5,
+    x: 0,
+    z: 50,
+    width: 22,
+    depth: 3,
+    height: 7,
     active: false,
   },
 ];
@@ -168,10 +127,10 @@ export function createGame(config: GameConfig): GameState {
   const random = new SeededRandom(config.seed);
   const oniIndex = Math.floor(random.next() * 4);
   const spawns: Vec2[] = [
-    { x: -42, z: -8 },
-    { x: 42, z: -8 },
-    { x: -42, z: 10 },
-    { x: 42, z: 10 },
+    { x: -34, z: 0 },
+    { x: 34, z: 0 },
+    { x: 0, z: -34 },
+    { x: 0, z: 34 },
   ];
   const strategies: BotStrategy[] = ["CHASE", "CITY_CORE", "RAIL", "CHASE"];
   const players = spawns.map((spawn, index) =>
@@ -193,6 +152,10 @@ export function createGame(config: GameConfig): GameState {
   return {
     matchId: `local-${config.seed}`,
     seed: config.seed,
+    world: {
+      ...DEFAULT_WORLD_SPEC,
+      roadOffsets: [...DEFAULT_WORLD_SPEC.roadOffsets],
+    },
     status: "WAITING",
     nowMs: 0,
     startedAtMs: null,
@@ -204,13 +167,16 @@ export function createGame(config: GameConfig): GameState {
     winnerId: null,
     tagLockedUntilMs: 0,
     players,
-    obstacles: [...createBuildings(), ...BARRIER_ANCHORS.map((barrier) => ({ ...barrier }))],
+    obstacles: [
+      ...createCityObstacles(DEFAULT_WORLD_SPEC, config.seed),
+      ...BARRIER_ANCHORS.map((barrier) => ({ ...barrier })),
+    ],
     cityCore: {
       position: { x: 0, z: 0 },
       target: { x: firstTarget.x, z: firstTarget.z },
       warningStartedAtMs: null,
       patchAppliesAtMs: patchIntervalMs,
-      radius: 14,
+      radius: 28,
       patchIndex: firstBarrierIndex,
     },
     durationMs: config.durationMs ?? DEFAULT_MATCH_DURATION_MS,
@@ -286,6 +252,52 @@ function nearestPlayer(player: PlayerSnapshot, candidates: PlayerSnapshot[]): Pl
   }, undefined);
 }
 
+function directionToRoadGoal(state: GameState, player: PlayerSnapshot, goal: Vec2): Vec2 {
+  const directDistance = distance(player.position, goal);
+  if (
+    directDistance <= 28 &&
+    segmentIsClear(state.obstacles, player.position, goal, PLAYER_RADIUS)
+  ) {
+    return normalized(subtract(goal, player.position));
+  }
+
+  const startNode = nearestRoadNode(ROAD_GRAPH, player.position);
+  const goalNode = nearestRoadNode(ROAD_GRAPH, goal);
+  const path = findRoadPath(ROAD_GRAPH, startNode.id, goalNode.id, state.obstacles);
+  let waypoint: RoadNode | undefined;
+  if (distanceBetween(player.position, startNode.position) > 3) waypoint = startNode;
+  else waypoint = path[1] ?? path[0];
+
+  if (waypoint === undefined) return normalized(subtract(goal, player.position));
+  if (waypoint.id === goalNode.id && directDistance <= 38) {
+    return normalized(subtract(goal, player.position));
+  }
+  return normalized(subtract(waypoint.position, player.position));
+}
+
+function runnerRoadGoal(state: GameState, player: PlayerSnapshot, oni: PlayerSnapshot): Vec2 {
+  if (player.strategy === "CITY_CORE" && state.cityCore.warningStartedAtMs !== null) {
+    return state.cityCore.target;
+  }
+  if (player.strategy === "RAIL") {
+    return player.position.z <= 0 ? { x: 0, z: 200 } : { x: 0, z: -200 };
+  }
+
+  const idBias = [...player.id].reduce((sum, character) => sum + character.charCodeAt(0), 0) % 7;
+  const best = ROAD_GRAPH.nodes.reduce<RoadNode | undefined>((current, node, index) => {
+    const score =
+      distanceBetween(node.position, oni.position) -
+      distanceBetween(node.position, player.position) * 0.16 +
+      ((index + idBias) % 7) * 0.01;
+    if (current === undefined) return node;
+    const currentScore =
+      distanceBetween(current.position, oni.position) -
+      distanceBetween(current.position, player.position) * 0.16;
+    return score > currentScore ? node : current;
+  }, undefined);
+  return best?.position ?? player.position;
+}
+
 function botMovement(state: GameState, player: PlayerSnapshot): Movement {
   const oni = state.players.find((candidate) => candidate.role === "ONI");
   if (oni === undefined) return { x: 0, z: 0, sprint: false };
@@ -295,35 +307,18 @@ function botMovement(state: GameState, player: PlayerSnapshot): Movement {
       player,
       state.players.filter((candidate) => candidate.role === "RUNNER"),
     );
-    const direction = target === undefined ? { x: 0, z: 0 } : normalized(subtract(target.position, player.position));
+    const direction = target === undefined
+      ? { x: 0, z: 0 }
+      : directionToRoadGoal(state, player, target.position);
     return { ...direction, sprint: false };
   }
 
-  const awayFromOni = normalized(subtract(player.position, oni.position));
-  let tactical: Vec2;
-  if (player.strategy === "CITY_CORE" && state.cityCore.warningStartedAtMs !== null) {
-    tactical = normalized(subtract(state.cityCore.target, player.position));
-  } else if (player.strategy === "RAIL") {
-    const stationTarget = player.position.z < 0 ? { x: 0, z: 70 } : { x: 0, z: -70 };
-    tactical = normalized(subtract(stationTarget, player.position));
-  } else {
-    tactical = normalized({ x: -awayFromOni.z, z: awayFromOni.x });
-  }
-
-  return {
-    x: awayFromOni.x * 0.78 + tactical.x * 0.35,
-    z: awayFromOni.z * 0.78 + tactical.z * 0.35,
-    sprint: false,
-  };
+  const goal = runnerRoadGoal(state, player, oni);
+  return { ...directionToRoadGoal(state, player, goal), sprint: false };
 }
 
 function collides(state: GameState, x: number, z: number): boolean {
-  return state.obstacles.some((obstacle) => {
-    if (!obstacle.active) return false;
-    const halfWidth = obstacle.width / 2 + PLAYER_RADIUS;
-    const halfDepth = obstacle.depth / 2 + PLAYER_RADIUS;
-    return Math.abs(x - obstacle.x) < halfWidth && Math.abs(z - obstacle.z) < halfDepth;
-  });
+  return pointCollides(state.obstacles, { x, z }, PLAYER_RADIUS);
 }
 
 function movePlayer(state: GameState, player: PlayerSnapshot, movement: Movement, deltaMs: number): void {
@@ -333,8 +328,9 @@ function movePlayer(state: GameState, player: PlayerSnapshot, movement: Movement
   const seconds = deltaMs / 1_000;
   const dx = direction.x * speed * seconds;
   const dz = direction.z * speed * seconds;
-  const nextX = Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE, player.position.x + dx));
-  const nextZ = Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE, player.position.z + dz));
+  const worldLimit = state.world.halfSize - PLAYER_RADIUS;
+  const nextX = Math.max(-worldLimit, Math.min(worldLimit, player.position.x + dx));
+  const nextZ = Math.max(-worldLimit, Math.min(worldLimit, player.position.z + dz));
 
   let appliedX = player.position.x;
   let appliedZ = player.position.z;
@@ -342,8 +338,8 @@ function movePlayer(state: GameState, player: PlayerSnapshot, movement: Movement
   if (!collides(state, appliedX, nextZ)) appliedZ = nextZ;
 
   if (appliedX === player.position.x && appliedZ === player.position.z && (dx !== 0 || dz !== 0)) {
-    const sidestepX = Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE, player.position.x - dz));
-    const sidestepZ = Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE, player.position.z + dx));
+    const sidestepX = Math.max(-worldLimit, Math.min(worldLimit, player.position.x - dz));
+    const sidestepZ = Math.max(-worldLimit, Math.min(worldLimit, player.position.z + dx));
     if (!collides(state, sidestepX, player.position.z)) appliedX = sidestepX;
     if (!collides(state, appliedX, sidestepZ)) appliedZ = sidestepZ;
   }
@@ -355,7 +351,7 @@ function movePlayer(state: GameState, player: PlayerSnapshot, movement: Movement
   player.position = { x: appliedX, z: appliedZ };
 }
 
-function updateCityCore(state: GameState): void {
+function updateCityCore(state: GameState, deltaMs: number): void {
   const warningDuration = Math.min(5_000, Math.max(1_000, state.patchIntervalMs * 0.45));
   if (
     state.cityCore.warningStartedAtMs === null &&
@@ -368,8 +364,9 @@ function updateCityCore(state: GameState): void {
 
   const targetDelta = subtract(state.cityCore.target, state.cityCore.position);
   const travel = normalized(targetDelta);
-  state.cityCore.position.x += travel.x * Math.min(0.22, length(targetDelta));
-  state.cityCore.position.z += travel.z * Math.min(0.22, length(targetDelta));
+  const travelDistance = Math.min(length(targetDelta), (deltaMs / 1_000) * 18);
+  state.cityCore.position.x += travel.x * travelDistance;
+  state.cityCore.position.z += travel.z * travelDistance;
 
   if (state.nowMs < state.cityCore.patchAppliesAtMs) return;
 
@@ -442,7 +439,7 @@ export function stepGame(state: GameState, inputs: Inputs, deltaMs: number): voi
     movePlayer(state, player, movement ?? { x: 0, z: 0, sprint: false }, appliedDeltaMs);
   }
 
-  updateCityCore(state);
+  updateCityCore(state, appliedDeltaMs);
   applyTag(state);
   state.remainingMs = Math.max(0, endsAtMs - state.nowMs);
   if (state.nowMs >= endsAtMs) finishGame(state);
@@ -452,6 +449,10 @@ export function snapshotOf(state: GameState): MatchSnapshot {
   return {
     matchId: state.matchId,
     seed: state.seed,
+    world: {
+      ...state.world,
+      roadOffsets: [...state.world.roadOffsets],
+    },
     status: state.status,
     nowMs: state.nowMs,
     startedAtMs: state.startedAtMs,

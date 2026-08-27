@@ -12,6 +12,8 @@ test("players can enter, move, observe CITY CORE, and finish a match", async ({ 
   await expect(page.locator("#hud")).toBeVisible();
   await expect(page.locator("#score-list li")).toHaveCount(4);
   await expect(page.locator("body")).toHaveAttribute("data-match-status", "RUNNING");
+  await expect(page.locator("body")).toHaveAttribute("data-world-size", "500");
+  await expect(page.locator("body")).toHaveAttribute("data-active-chunks", "9");
 
   const secondPage = await page.context().newPage();
   secondPage.on("pageerror", (error) => pageErrors.push(error.message));
@@ -21,6 +23,7 @@ test("players can enter, move, observe CITY CORE, and finish a match", async ({ 
   await expect(secondPage.locator("#hud")).toBeVisible();
   await expect(page.locator("#score-list")).toContainText("Second Runner");
   await expect(secondPage.locator("#score-list")).toContainText("E2E Runner");
+  await secondPage.close();
 
   const position = page.locator("#player-position");
   const before = Number(await position.getAttribute("data-z"));
@@ -30,9 +33,11 @@ test("players can enter, move, observe CITY CORE, and finish a match", async ({ 
   await expect.poll(async () => Number(await position.getAttribute("data-z"))).not.toBe(before);
 
   await expect(page.locator("#map-version")).not.toHaveText("v1", { timeout: 6_000 });
+  await expect
+    .poll(async () => Number(await page.locator("#performance-label").getAttribute("data-fps")), { timeout: 10_000 })
+    .toBeGreaterThan(20);
   await page.screenshot({ path: "test-results/gameplay.png", fullPage: true });
-  await expect(page.locator("#result-panel")).toBeVisible({ timeout: 20_000 });
-  await expect(secondPage.locator("#result-panel")).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator("#result-panel")).toBeVisible({ timeout: 30_000 });
   await expect(page.locator("body")).toHaveAttribute("data-match-status", "FINISHED");
   await expect(page.getByRole("button", { name: /もう一度プレイ/ })).toBeVisible();
   expect(pageErrors).toEqual([]);

@@ -59,5 +59,35 @@ describe("authoritative tag rules", () => {
 
     expect(run()).toBe(run());
   });
-});
 
+  it("keeps a human outside an active CITY CORE barrier collider", () => {
+    const game = createGame({ seed: 20260827, durationMs: 10_000 });
+    const human = replaceBotWithHuman(game, "human-collider", "Collider Tester");
+    for (const player of game.players) player.kind = "HUMAN";
+    for (const obstacle of game.obstacles) {
+      if (obstacle.kind === "BARRIER") obstacle.active = obstacle.id === "barrier-0";
+    }
+    human.position = { x: -58, z: 0 };
+    startGame(game);
+
+    for (let index = 0; index < 30; index += 1) {
+      stepGame(game, {
+        [human.id]: { x: 1, z: 0, sprint: false },
+      }, 50);
+    }
+
+    expect(human.position.x).toBeLessThan(-52.8);
+  });
+
+  it("activates the collider only after the warning interval completes", () => {
+    const game = createGame({ seed: 20260827, durationMs: 5_000, patchIntervalMs: 2_000 });
+    startGame(game);
+    while (game.nowMs < 1_950) stepGame(game, {}, 50);
+    expect(game.cityCore.warningStartedAtMs).not.toBeNull();
+    expect(game.obstacles.filter((obstacle) => obstacle.kind === "BARRIER" && obstacle.active)).toHaveLength(0);
+
+    stepGame(game, {}, 50);
+    expect(game.mapVersion).toBe(2);
+    expect(game.obstacles.filter((obstacle) => obstacle.kind === "BARRIER" && obstacle.active)).toHaveLength(1);
+  });
+});

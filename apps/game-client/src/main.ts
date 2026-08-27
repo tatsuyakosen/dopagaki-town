@@ -1,18 +1,17 @@
-import {
-  ArcRotateCamera,
-  Color3,
-  Color4,
-  DirectionalLight,
-  Engine,
-  FollowCamera,
-  HemisphericLight,
-  MeshBuilder,
-  Scene,
-  StandardMaterial,
-  TransformNode,
-  Vector3,
-} from "@babylonjs/core";
-import type { Mesh } from "@babylonjs/core";
+import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera.js";
+import { FollowCamera } from "@babylonjs/core/Cameras/followCamera.js";
+import { Engine } from "@babylonjs/core/Engines/engine.js";
+import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight.js";
+import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight.js";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial.js";
+import { Color3, Color4 } from "@babylonjs/core/Maths/math.color.js";
+import { Vector3 } from "@babylonjs/core/Maths/math.vector.js";
+import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder.js";
+import { TransformNode } from "@babylonjs/core/Meshes/transformNode.js";
+import { Scene } from "@babylonjs/core/scene.js";
+import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh.js";
+import type { Mesh } from "@babylonjs/core/Meshes/mesh.js";
+import "@babylonjs/core/Meshes/instancedMesh.js";
 import {
   ServerMessageSchema,
   encodeMessage,
@@ -20,6 +19,7 @@ import {
   type MatchSnapshot,
   type Obstacle,
   type PlayerSnapshot,
+  type WorldSpec,
 } from "@dopagaki/contracts";
 import "./style.css";
 
@@ -42,35 +42,41 @@ const entryError = required<HTMLElement>("#entry-error");
 const roleLabel = required<HTMLElement>("#role-label");
 const timeLabel = required<HTMLElement>("#time-label");
 const mapVersion = required<HTMLElement>("#map-version");
+const worldLabel = required<HTMLElement>("#world-label");
 const seedLabel = required<HTMLElement>("#seed-label");
 const eventText = required<HTMLElement>("#event-text");
 const patchWarning = required<HTMLElement>("#patch-warning");
 const patchCountdown = required<HTMLElement>("#patch-countdown");
 const scoreList = required<HTMLOListElement>("#score-list");
 const playerPosition = required<HTMLElement>("#player-position");
+const performanceLabel = required<HTMLElement>("#performance-label");
 const dangerBanner = required<HTMLElement>("#danger-banner");
 const connectionLabel = required<HTMLElement>("#connection-label");
 const resultTitle = required<HTMLElement>("#result-title");
 const resultDetail = required<HTMLElement>("#result-detail");
 
-const engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+const engine = new Engine(canvas, false, { preserveDrawingBuffer: false, stencil: false });
+const renderScale = Number(import.meta.env.VITE_RENDER_SCALE ?? "2.25");
+engine.setHardwareScalingLevel(Number.isFinite(renderScale) ? Math.max(1, renderScale) : 2.25);
 const scene = new Scene(engine);
+scene.skipPointerMovePicking = true;
 scene.clearColor = new Color4(0.025, 0.06, 0.065, 1);
 scene.fogEnabled = true;
 scene.fogMode = Scene.FOGMODE_EXP2;
-scene.fogDensity = 0.0085;
+scene.fogDensity = 0.0025;
 scene.fogColor = new Color3(0.025, 0.065, 0.07);
 
-const overviewCamera = new ArcRotateCamera("overview", -Math.PI / 2.35, 1.03, 165, Vector3.Zero(), scene);
-overviewCamera.lowerRadiusLimit = 75;
-overviewCamera.upperRadiusLimit = 190;
+const overviewCamera = new ArcRotateCamera("overview", -Math.PI / 2.35, 1.03, 410, Vector3.Zero(), scene);
+overviewCamera.lowerRadiusLimit = 230;
+overviewCamera.upperRadiusLimit = 540;
 overviewCamera.attachControl(canvas, true);
 const followCamera = new FollowCamera("follow", new Vector3(0, 14, 20), scene);
-followCamera.radius = 21;
-followCamera.heightOffset = 10;
+followCamera.radius = 24;
+followCamera.heightOffset = 12;
 followCamera.rotationOffset = 180;
 followCamera.cameraAcceleration = 0.08;
 followCamera.maxCameraSpeed = 16;
+followCamera.maxZ = 850;
 scene.activeCamera = overviewCamera;
 
 const ambient = new HemisphericLight("ambient", new Vector3(0, 1, 0), scene);
@@ -91,28 +97,119 @@ function material(name: string, diffuse: string, emissive?: string): StandardMat
 
 const groundMaterial = material("asphalt", "#0d2929");
 groundMaterial.roughness = 1;
-const ground = MeshBuilder.CreateGround("ground", { width: 180, height: 180 }, scene);
+const ground = MeshBuilder.CreateGround("ground", { width: 500, height: 500 }, scene);
 ground.material = groundMaterial;
 
+const PREVIEW_WORLD: WorldSpec = {
+  sizeMeters: 500,
+  halfSize: 250,
+  chunksPerAxis: 3,
+  chunkSizeMeters: 500 / 3,
+  activeChunkRadius: 1,
+  roadOffsets: [-200, -100, 0, 100, 200],
+  roadWidth: 18,
+};
 const roadMaterial = material("road", "#173839");
 const markingMaterial = material("marking", "#a9cbb8", "#183c34");
-for (const offset of [-42, 0, 42]) {
-  const verticalRoad = MeshBuilder.CreateBox(`road-v-${offset}`, { width: 12, depth: 180, height: 0.08 }, scene);
-  verticalRoad.position.set(offset, 0.04, 0);
-  verticalRoad.material = roadMaterial;
-  const horizontalRoad = MeshBuilder.CreateBox(`road-h-${offset}`, { width: 180, depth: 12, height: 0.09 }, scene);
-  horizontalRoad.position.set(0, 0.045, offset);
-  horizontalRoad.material = roadMaterial;
+const alleyMaterial = material("alley", "#112f30");
+const chunkMaterial = material("chunk-grid", "#1f5550", "#0e4a3d");
+const poleMaterial = material("streetlight-pole", "#274442");
+const lampMaterial = material("streetlight-lamp", "#ffe5a4", "#d5a839");
 
-  for (let line = -78; line <= 78; line += 13) {
-    const verticalMark = MeshBuilder.CreateBox(`vm-${offset}-${line}`, { width: 0.18, depth: 5.4, height: 0.02 }, scene);
-    verticalMark.position.set(offset, 0.1, line);
-    verticalMark.material = markingMaterial;
-    const horizontalMark = MeshBuilder.CreateBox(`hm-${offset}-${line}`, { width: 5.4, depth: 0.18, height: 0.02 }, scene);
-    horizontalMark.position.set(line, 0.105, offset);
-    horizontalMark.material = markingMaterial;
+function createUnitBox(name: string, value: StandardMaterial): Mesh {
+  const master = MeshBuilder.CreateBox(name, { size: 1 }, scene);
+  master.material = value;
+  master.position.y = -1_000;
+  master.isPickable = false;
+  return master;
+}
+
+function placeBoxInstance(
+  master: Mesh,
+  name: string,
+  x: number,
+  y: number,
+  z: number,
+  width: number,
+  height: number,
+  depth: number,
+): AbstractMesh {
+  const instance = master.createInstance(name);
+  instance.position.set(x, y, z);
+  instance.scaling.set(width, height, depth);
+  instance.isPickable = false;
+  instance.freezeWorldMatrix();
+  return instance;
+}
+
+function buildRoadPrefabs(world: WorldSpec): void {
+  const roadMaster = createUnitBox("road-prefab", roadMaterial);
+  const markingMaster = createUnitBox("marking-prefab", markingMaterial);
+  const alleyMaster = createUnitBox("alley-prefab", alleyMaterial);
+  const chunkMaster = createUnitBox("chunk-border-prefab", chunkMaterial);
+  const poleMaster = MeshBuilder.CreateCylinder("streetlight-pole-prefab", { height: 1, diameter: 1, tessellation: 6 }, scene);
+  poleMaster.material = poleMaterial;
+  poleMaster.position.y = -1_000;
+  const lampMaster = MeshBuilder.CreateSphere("streetlight-lamp-prefab", { diameter: 1, segments: 4 }, scene);
+  lampMaster.material = lampMaterial;
+  lampMaster.position.y = -1_000;
+
+  for (const offset of world.roadOffsets) {
+    placeBoxInstance(roadMaster, `road-v-${offset}`, offset, 0.04, 0, world.roadWidth, 0.08, world.sizeMeters);
+    placeBoxInstance(roadMaster, `road-h-${offset}`, 0, 0.045, offset, world.sizeMeters, 0.09, world.roadWidth);
+    for (let line = -world.halfSize + 16; line <= world.halfSize - 16; line += 40) {
+      placeBoxInstance(markingMaster, `vm-${offset}-${line}`, offset, 0.1, line, 0.18, 0.02, 7.2);
+      placeBoxInstance(markingMaster, `hm-${offset}-${line}`, line, 0.105, offset, 7.2, 0.02, 0.18);
+    }
+    if (Math.abs(offset) === 100) continue;
+    for (let light = -200; light <= 200; light += 100) {
+      const verticalPole = poleMaster.createInstance(`pole-v-${offset}-${light}`);
+      verticalPole.position.set(offset + world.roadWidth / 2 + 2.5, 2.7, light);
+      verticalPole.scaling.set(0.24, 5.4, 0.24);
+      verticalPole.freezeWorldMatrix();
+      const verticalLamp = lampMaster.createInstance(`lamp-v-${offset}-${light}`);
+      verticalLamp.position.set(offset + world.roadWidth / 2 + 2.5, 5.5, light);
+      verticalLamp.scaling.setAll(0.65);
+      verticalLamp.freezeWorldMatrix();
+
+      const horizontalPole = poleMaster.createInstance(`pole-h-${offset}-${light}`);
+      horizontalPole.position.set(light, 2.7, offset + world.roadWidth / 2 + 2.5);
+      horizontalPole.scaling.set(0.24, 5.4, 0.24);
+      horizontalPole.freezeWorldMatrix();
+      const horizontalLamp = lampMaster.createInstance(`lamp-h-${offset}-${light}`);
+      horizontalLamp.position.set(light, 5.5, offset + world.roadWidth / 2 + 2.5);
+      horizontalLamp.scaling.setAll(0.65);
+      horizontalLamp.freezeWorldMatrix();
+    }
+  }
+
+  for (let index = 0; index < world.roadOffsets.length - 1; index += 1) {
+    const left = world.roadOffsets[index];
+    const right = world.roadOffsets[index + 1];
+    if (left === undefined || right === undefined) continue;
+    const center = (left + right) / 2;
+    const span = right - left - world.roadWidth;
+    for (let cross = 0; cross < world.roadOffsets.length - 1; cross += 1) {
+      const top = world.roadOffsets[cross];
+      const bottom = world.roadOffsets[cross + 1];
+      if (top === undefined || bottom === undefined) continue;
+      const crossCenter = (top + bottom) / 2;
+      placeBoxInstance(alleyMaster, `alley-v-${index}-${cross}`, center, 0.055, crossCenter, 8, 0.05, span);
+      placeBoxInstance(alleyMaster, `alley-h-${index}-${cross}`, center, 0.06, crossCenter, span, 0.05, 8);
+    }
+  }
+
+  for (let index = 1; index < world.chunksPerAxis; index += 1) {
+    const offset = -world.halfSize + world.chunkSizeMeters * index;
+    placeBoxInstance(chunkMaster, `chunk-v-${index}`, offset, 0.14, 0, 0.22, 0.03, world.sizeMeters);
+    placeBoxInstance(chunkMaster, `chunk-h-${index}`, 0, 0.14, offset, world.sizeMeters, 0.03, 0.22);
   }
 }
+
+buildRoadPrefabs(PREVIEW_WORLD);
+[groundMaterial, roadMaterial, markingMaterial, alleyMaterial, chunkMaterial, poleMaterial, lampMaterial].forEach(
+  (value) => value.freeze(),
+);
 
 const cityCoreMaterial = material("city-core", "#4e1d4b", "#ff43cf");
 const cityCore = new TransformNode("CITY CORE", scene);
@@ -124,10 +221,15 @@ const coreRing = MeshBuilder.CreateTorus("core-ring", { diameter: 8, thickness: 
 coreRing.parent = cityCore;
 coreRing.position.y = 2.1;
 coreRing.material = cityCoreMaterial;
-const targetRing = MeshBuilder.CreateTorus("patch-target", { diameter: 28, thickness: 0.18, tessellation: 64 }, scene);
+const targetRing = MeshBuilder.CreateTorus("patch-target", { diameter: 56, thickness: 0.22, tessellation: 64 }, scene);
 targetRing.position.y = 0.25;
 targetRing.material = cityCoreMaterial;
 targetRing.isVisible = false;
+const barrierPreviewMaterial = material("barrier-preview", "#6f314c", "#ff4770");
+barrierPreviewMaterial.alpha = 0.5;
+const barrierPreview = MeshBuilder.CreateBox("barrier-preview", { size: 1 }, scene);
+barrierPreview.material = barrierPreviewMaterial;
+barrierPreview.isVisible = false;
 
 interface PlayerVisual {
   root: TransformNode;
@@ -136,7 +238,8 @@ interface PlayerVisual {
 }
 
 const playerVisuals = new Map<string, PlayerVisual>();
-const obstacleVisuals = new Map<string, Mesh>();
+const obstacleVisuals = new Map<string, AbstractMesh>();
+const obstacleActiveStates = new Map<string, boolean>();
 const buildingMaterials = [
   material("building-a", "#173c3b", "#061a18"),
   material("building-b", "#204744", "#081e1c"),
@@ -144,9 +247,16 @@ const buildingMaterials = [
 ];
 const stationMaterial = material("station", "#183b50", "#0e6b80");
 const barrierMaterial = material("barrier", "#582839", "#ff365f");
+const roofMaterial = material("rooftop", "#28514d", "#092522");
 const runnerMaterial = material("runner", "#168266", "#34eeb2");
 const localMaterial = material("local", "#0f647c", "#45d9ff");
 const oniMaterial = material("oni", "#8c2032", "#ff304f");
+const buildingMasters = buildingMaterials.map((value, index) => createUnitBox(`building-prefab-${index}`, value));
+const stationMaster = createUnitBox("station-prefab", stationMaterial);
+const roofMaster = createUnitBox("rooftop-prefab", roofMaterial);
+[...buildingMaterials, stationMaterial, barrierMaterial, roofMaterial, runnerMaterial, localMaterial, oniMaterial].forEach(
+  (value) => value.freeze(),
+);
 
 function hashName(value: string): number {
   return [...value].reduce((hash, char) => hash + char.charCodeAt(0), 0);
@@ -155,17 +265,42 @@ function hashName(value: string): number {
 function syncObstacle(obstacle: Obstacle): void {
   let mesh = obstacleVisuals.get(obstacle.id);
   if (mesh === undefined) {
-    mesh = MeshBuilder.CreateBox(
-      obstacle.id,
-      { width: obstacle.width, depth: obstacle.depth, height: obstacle.height },
-      scene,
-    );
-    mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
-    if (obstacle.kind === "BARRIER") mesh.material = barrierMaterial;
-    else if (obstacle.kind === "STATION") mesh.material = stationMaterial;
-    else mesh.material = buildingMaterials[hashName(obstacle.id) % buildingMaterials.length] ?? stationMaterial;
+    if (obstacle.kind === "BUILDING") {
+      const master = buildingMasters[hashName(obstacle.id) % buildingMasters.length] ?? buildingMasters[0];
+      if (master === undefined) throw new Error("At least one building prefab is required");
+      mesh = master.createInstance(obstacle.id);
+      mesh.scaling.set(obstacle.width, obstacle.height, obstacle.depth);
+      mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
+      mesh.freezeWorldMatrix();
+      if (hashName(obstacle.id) % 4 === 0) {
+        const roof = roofMaster.createInstance(`${obstacle.id}-roof`);
+        roof.scaling.set(obstacle.width * 0.72, 0.7, obstacle.depth * 0.72);
+        roof.position.set(obstacle.x, obstacle.height + 0.35, obstacle.z);
+        roof.freezeWorldMatrix();
+      }
+    } else if (obstacle.kind === "STATION") {
+      mesh = stationMaster.createInstance(obstacle.id);
+      mesh.scaling.set(obstacle.width, obstacle.height, obstacle.depth);
+      mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
+      mesh.freezeWorldMatrix();
+      const canopy = roofMaster.createInstance(`${obstacle.id}-canopy`);
+      canopy.scaling.set(obstacle.width * 1.18, 0.5, obstacle.depth * 1.45);
+      canopy.position.set(obstacle.x, obstacle.height + 0.25, obstacle.z);
+      canopy.freezeWorldMatrix();
+    } else {
+      mesh = MeshBuilder.CreateBox(
+        obstacle.id,
+        { width: obstacle.width, depth: obstacle.depth, height: obstacle.height },
+        scene,
+      );
+      mesh.position.set(obstacle.x, obstacle.height / 2, obstacle.z);
+      mesh.material = barrierMaterial;
+      mesh.freezeWorldMatrix();
+    }
     obstacleVisuals.set(obstacle.id, mesh);
   }
+  if (obstacleActiveStates.get(obstacle.id) === obstacle.active) return;
+  obstacleActiveStates.set(obstacle.id, obstacle.active);
   mesh.setEnabled(obstacle.active);
 }
 
@@ -209,6 +344,7 @@ let localPlayerId: string | null = null;
 let latestSnapshot: MatchSnapshot | null = null;
 let inputSequence = 0;
 let lastEventId = -1;
+let lastScoreboardUpdateAt = Number.NEGATIVE_INFINITY;
 let enteredName = "Runner";
 const keys = new Set<string>();
 
@@ -298,7 +434,10 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
   document.body.dataset.matchStatus = snapshot.status;
   timeLabel.textContent = formatTime(snapshot.remainingMs);
   mapVersion.textContent = `v${snapshot.mapVersion}`;
+  worldLabel.textContent = `${snapshot.world.sizeMeters}m / ${snapshot.world.chunksPerAxis}×${snapshot.world.chunksPerAxis}`;
   seedLabel.textContent = String(snapshot.seed);
+  document.body.dataset.worldSize = String(snapshot.world.sizeMeters);
+  document.body.dataset.activeChunks = `${snapshot.world.chunksPerAxis * snapshot.world.chunksPerAxis}`;
   for (const obstacle of snapshot.obstacles) syncObstacle(obstacle);
   for (const player of snapshot.players) syncPlayer(player);
 
@@ -316,18 +455,39 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
   cityCore.position.z = snapshot.cityCore.position.z;
   targetRing.position.x = snapshot.cityCore.target.x;
   targetRing.position.z = snapshot.cityCore.target.z;
+  targetRing.scaling.setAll(snapshot.cityCore.radius / 28);
   const warning = snapshot.cityCore.warningStartedAtMs !== null;
   targetRing.isVisible = warning;
   patchWarning.hidden = !warning;
   if (warning) {
-    patchCountdown.textContent = `${Math.max(0, (snapshot.cityCore.patchAppliesAtMs - snapshot.nowMs) / 1_000).toFixed(1)}s`;
+    const remainingMs = Math.max(0, snapshot.cityCore.patchAppliesAtMs - snapshot.nowMs);
+    patchCountdown.textContent = `${(remainingMs / 1_000).toFixed(1)}s`;
+    const futureBarrier = snapshot.obstacles.find(
+      (obstacle) => obstacle.id === `barrier-${snapshot.cityCore.patchIndex}`,
+    );
+    if (futureBarrier !== undefined) {
+      const riseProgress = Math.max(0, Math.min(1, 1 - remainingMs / 1_000));
+      const eased = riseProgress * riseProgress * (3 - 2 * riseProgress);
+      barrierPreview.isVisible = true;
+      barrierPreview.scaling.set(futureBarrier.width, futureBarrier.height, futureBarrier.depth);
+      barrierPreview.position.set(
+        futureBarrier.x,
+        -futureBarrier.height / 2 + futureBarrier.height * eased,
+        futureBarrier.z,
+      );
+    }
+  } else {
+    barrierPreview.isVisible = false;
   }
 
   if (snapshot.lastEventId !== lastEventId) {
     lastEventId = snapshot.lastEventId;
     eventText.textContent = snapshot.lastEventText;
   }
-  syncScoreboard(snapshot);
+  if (snapshot.nowMs - lastScoreboardUpdateAt >= 250 || snapshot.status === "FINISHED") {
+    lastScoreboardUpdateAt = snapshot.nowMs;
+    syncScoreboard(snapshot);
+  }
 
   if (snapshot.status === "FINISHED") {
     const winner = snapshot.players.find((player) => player.id === snapshot.winnerId);
@@ -370,6 +530,7 @@ setInterval(() => {
   });
 }, 50);
 
+let lastPerformanceUpdate = 0;
 scene.onBeforeRenderObservable.add(() => {
   for (const visual of playerVisuals.values()) {
     visual.root.position = Vector3.Lerp(visual.root.position, visual.target, 0.22);
@@ -378,6 +539,17 @@ scene.onBeforeRenderObservable.add(() => {
   coreBody.rotation.x += 0.008;
   coreRing.rotation.y += 0.014;
   targetRing.rotation.y += 0.006;
+  if (barrierPreview.isVisible) {
+    barrierPreviewMaterial.alpha = 0.42 + Math.sin(performance.now() / 100) * 0.12;
+  }
+  if (performance.now() - lastPerformanceUpdate >= 500) {
+    lastPerformanceUpdate = performance.now();
+    const fps = engine.getFps();
+    const activeMeshes = scene.getActiveMeshes().length;
+    performanceLabel.textContent = `FPS ${fps.toFixed(0)} / MESH ${activeMeshes}`;
+    performanceLabel.dataset.fps = fps.toFixed(2);
+    performanceLabel.dataset.meshes = String(activeMeshes);
+  }
 });
 
 engine.runRenderLoop(() => scene.render());

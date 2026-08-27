@@ -27,6 +27,16 @@ export const RoleSchema = z.enum(["ONI", "RUNNER"]);
 export const PlayerKindSchema = z.enum(["HUMAN", "BOT"]);
 export const BotStrategySchema = z.enum(["CHASE", "CITY_CORE", "RAIL"]);
 
+export const WorldSpecSchema = z.object({
+  sizeMeters: z.number().positive(),
+  halfSize: z.number().positive(),
+  chunksPerAxis: z.number().int().positive(),
+  chunkSizeMeters: z.number().positive(),
+  activeChunkRadius: z.number().int().nonnegative(),
+  roadOffsets: z.array(z.number()).min(3),
+  roadWidth: z.number().positive(),
+});
+
 export const PlayerSnapshotSchema = z.object({
   id: z.string(),
   displayName: z.string(),
@@ -65,6 +75,7 @@ export const MatchStatusSchema = z.enum(["WAITING", "RUNNING", "FINISHED"]);
 export const MatchSnapshotSchema = z.object({
   matchId: z.string(),
   seed: z.number().int(),
+  world: WorldSpecSchema,
   status: MatchStatusSchema,
   nowMs: z.number().nonnegative(),
   startedAtMs: z.number().nonnegative().nullable(),
@@ -106,6 +117,7 @@ export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type Role = z.infer<typeof RoleSchema>;
 export type PlayerKind = z.infer<typeof PlayerKindSchema>;
 export type BotStrategy = z.infer<typeof BotStrategySchema>;
+export type WorldSpec = z.infer<typeof WorldSpecSchema>;
 export type PlayerSnapshot = z.infer<typeof PlayerSnapshotSchema>;
 export type Obstacle = z.infer<typeof ObstacleSchema>;
 export type CityCore = z.infer<typeof CityCoreSchema>;
@@ -116,4 +128,3 @@ export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export function encodeMessage(message: ClientMessage | ServerMessage): string {
   return JSON.stringify(message);
 }
-
