@@ -37,8 +37,24 @@ function send(socket: WebSocket, message: ServerMessage): void {
 }
 
 function broadcastSnapshot(): void {
-  const message: ServerMessage = { type: "SNAPSHOT", snapshot: room.snapshot() };
+  const message: ServerMessage = { type: "SNAPSHOT", snapshot: room.networkSnapshot() };
   const payload = encodeMessage(message);
+  for (const socket of clients.keys()) {
+    if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+  }
+}
+
+function roomConfigMessage(): ServerMessage {
+  return {
+    type: "ROOM_CONFIG",
+    matchId: room.game.matchId,
+    seed: room.game.seed,
+    transitGraph: room.game.transitGraph,
+  };
+}
+
+function broadcastRoomConfig(): void {
+  const payload = encodeMessage(roomConfigMessage());
   for (const socket of clients.keys()) {
     if (socket.readyState === WebSocket.OPEN) socket.send(payload);
   }
@@ -46,6 +62,7 @@ function broadcastSnapshot(): void {
 
 function restartGame(): void {
   room.restart();
+  broadcastRoomConfig();
   broadcastSnapshot();
 }
 
@@ -64,6 +81,7 @@ function joinGame(
     socketsByConnectionId.get(replacedConnectionId)?.close(4001, "Replaced by reconnect");
   }
   send(socket, { type: "WELCOME", ...welcome });
+  send(socket, roomConfigMessage());
   broadcastSnapshot();
 }
 

@@ -19,6 +19,7 @@ import {
   type MatchSnapshot,
   type Obstacle,
   type PlayerSnapshot,
+  type TransitGraph,
   type WorldSpec,
 } from "@dopagaki/contracts";
 import {
@@ -465,6 +466,8 @@ function syncPlayer(player: PlayerSnapshot, shouldRender: boolean): void {
 let socket: WebSocket | null = null;
 let localPlayerId: string | null = null;
 let latestSnapshot: MatchSnapshot | null = null;
+let roomTransitGraph: TransitGraph | null = null;
+let roomConfigMatchId = "";
 interface PersistedPlayerSession {
   playerToken: string;
   playerName: string;
@@ -543,6 +546,8 @@ function clearPlayerSession(): void {
   lastEventId = -1;
   lastKnownMapVersion = 1;
   lastAcknowledgedPatchKey = "";
+  roomTransitGraph = null;
+  roomConfigMatchId = "";
   reconnectAttempt = 0;
   lastPersistedSessionPayload = "";
   delete document.body.dataset.playerId;
@@ -642,9 +647,17 @@ function connect(): void {
       hud.hidden = false;
       enterButton.disabled = false;
       persistPlayerSession();
+    } else if (parsed.data.type === "ROOM_CONFIG") {
+      roomTransitGraph = parsed.data.transitGraph;
+      roomConfigMatchId = parsed.data.matchId;
     } else if (parsed.data.type === "SNAPSHOT") {
-      latestSnapshot = parsed.data.snapshot;
-      syncSnapshot(parsed.data.snapshot);
+      if (roomTransitGraph === null || roomConfigMatchId !== parsed.data.snapshot.matchId) return;
+      const snapshot: MatchSnapshot = {
+        ...parsed.data.snapshot,
+        transitGraph: roomTransitGraph,
+      };
+      latestSnapshot = snapshot;
+      syncSnapshot(snapshot);
     } else if (parsed.data.type === "ERROR") {
       if (parsed.data.code === "TRANSIT_REJECTED") transitMessage.textContent = parsed.data.message;
       else entryError.textContent = parsed.data.message;

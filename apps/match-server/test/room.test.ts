@@ -214,4 +214,11 @@ describe("authoritative reconnect room", () => {
     expect(player.transit.reservedFareYen).toBe(reservedFare);
     expect(player.transit.balanceYen).toBe(1_000);
   });
+
+  it("sends the fixed transit graph separately from 10Hz snapshots", () => {
+    const { room } = roomFixture();
+
+    expect(room.snapshot().transitGraph.timetable.length).toBeGreaterThan(0);
+    expect("transitGraph" in room.networkSnapshot()).toBe(false);
+  });
 });

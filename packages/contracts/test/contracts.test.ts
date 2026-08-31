@@ -4,6 +4,7 @@ import {
   MapPatchSchema,
   MatchSnapshotSchema,
   ServerMessageSchema,
+  TransitGraphSchema,
 } from "../src/index.js";
 
 describe("runtime contracts", () => {
@@ -57,6 +58,50 @@ describe("runtime contracts", () => {
       type: "TRANSIT_RESERVE",
       reservationId: "",
       departureId: "departure-1",
+    })).toThrow();
+  });
+
+  it("rejects transit graphs with broken references or inconsistent times", () => {
+    const graph = {
+      source: "FIXTURE",
+      seed: 20260827,
+      stations: ["osaka", "fukushima", "temma", "nakazakicho"].map((id, index) => ({
+        id,
+        name: id,
+        chunkId: `chunk-${index}`,
+        position: { x: index * 100, z: 0 },
+      })),
+      routes: [{
+        id: "route-osaka-fukushima",
+        fromStationId: "osaka",
+        toStationId: "fukushima",
+        durationMs: 10_000,
+        fareYen: 140,
+        transfers: 0,
+      }],
+      timetable: [{
+        id: "departure-1",
+        routeId: "route-osaka-fukushima",
+        departureAtMs: 20_000,
+        arrivalAtMs: 30_000,
+      }],
+    } as const;
+
+    const parsed = TransitGraphSchema.parse(graph);
+    expect(parsed.routes).toHaveLength(1);
+    expect(ServerMessageSchema.parse({
+      type: "ROOM_CONFIG",
+      matchId: "match-20260827",
+      seed: graph.seed,
+      transitGraph: parsed,
+    })).toMatchObject({ type: "ROOM_CONFIG", matchId: "match-20260827" });
+    expect(() => TransitGraphSchema.parse({
+      ...graph,
+      routes: [{ ...graph.routes[0], toStationId: "unknown" }],
+    })).toThrow();
+    expect(() => TransitGraphSchema.parse({
+      ...graph,
+      timetable: [{ ...graph.timetable[0], arrivalAtMs: 30_001 }],
     })).toThrow();
   });
 

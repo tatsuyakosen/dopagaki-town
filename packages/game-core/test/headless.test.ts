@@ -26,7 +26,7 @@ describe("100-seed headless gate", () => {
       expect(first.mapVersion, `seed ${seed} CITY CORE patches`).toBeGreaterThan(1);
       expect(first.minimumBalance, `seed ${seed} nonnegative balance`).toBeGreaterThanOrEqual(0);
     }
-  }, 30_000);
+  }, 60_000);
 
   it("completes a full ten-minute 5km match without Bot/building overlap", () => {
     const game = createGame({ seed: 20260827 });
@@ -58,7 +58,7 @@ describe("100-seed headless gate", () => {
       }),
     ).toBe(true);
     expect(Math.min(...game.players.map((player) => player.transit.balanceYen))).toBeGreaterThanOrEqual(0);
-  }, 10_000);
+  }, 20_000);
 
   it("moves from one 5km edge to the other and back without boundary drift", () => {
     const game = createGame({

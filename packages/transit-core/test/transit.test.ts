@@ -5,7 +5,7 @@ import { createFixtureTransitGraph, resolveTransitGraph } from "../src/index.js"
 describe("transit fixture", () => {
   const stations = createStationMetadata(DEFAULT_WORLD_SPEC);
 
-  it("generates the same Osaka-area graph and 2-4 minute timetable from the same seed", () => {
+  it("generates the same Osaka-area graph and 2-4 game-minute timetable at 6x time", () => {
     const graph = createFixtureTransitGraph(20260827, stations);
     const replay = createFixtureTransitGraph(20260827, stations);
 
@@ -28,8 +28,9 @@ describe("transit fixture", () => {
         const previous = times[index - 1];
         expect(current).toBeDefined();
         expect(previous).toBeDefined();
-        expect((current ?? 0) - (previous ?? 0)).toBeGreaterThanOrEqual(120_000);
-        expect((current ?? 0) - (previous ?? 0)).toBeLessThanOrEqual(240_000);
+        expect((current ?? 0) - (previous ?? 0)).toBeGreaterThanOrEqual(20_000);
+        expect((current ?? 0) - (previous ?? 0)).toBeLessThanOrEqual(40_000);
+        expect([20_000, 30_000, 40_000]).toContain((current ?? 0) - (previous ?? 0));
       }
     }
   });

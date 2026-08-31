@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { ClientMessage, MatchSnapshot, Movement } from "@dopagaki/contracts";
+import type { ClientMessage, MatchSnapshot, Movement, NetworkMatchSnapshot } from "@dopagaki/contracts";
 import {
   acknowledgeMapChecksum,
   cancelTransit as cancelGameTransit,
@@ -7,6 +7,7 @@ import {
   gameCheckpointOf,
   letBotTakeOver,
   markHumanDisconnected,
+  networkSnapshotOf,
   replaceBotWithHuman,
   reserveTransit as reserveGameTransit,
   restoreGame,
@@ -289,6 +290,10 @@ export class MatchRoom {
 
   snapshot(): MatchSnapshot {
     return snapshotOf(this.game);
+  }
+
+  networkSnapshot(): NetworkMatchSnapshot {
+    return networkSnapshotOf(this.game);
   }
 
   restart(): void {

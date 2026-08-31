@@ -76,6 +76,49 @@ export const TransitGraphSchema = z.object({
   stations: z.array(TransitStationSchema).min(4).max(6),
   routes: z.array(TransitRouteSchema).min(1),
   timetable: z.array(TransitDepartureSchema).min(1),
+}).superRefine((graph, context) => {
+  const stationIds = new Set<string>();
+  for (const [index, station] of graph.stations.entries()) {
+    if (stationIds.has(station.id)) {
+      context.addIssue({ code: "custom", path: ["stations", index, "id"], message: "Station IDs must be unique" });
+    }
+    stationIds.add(station.id);
+  }
+
+  const routesById = new Map<string, z.infer<typeof TransitRouteSchema>>();
+  for (const [index, route] of graph.routes.entries()) {
+    if (routesById.has(route.id)) {
+      context.addIssue({ code: "custom", path: ["routes", index, "id"], message: "Route IDs must be unique" });
+    }
+    routesById.set(route.id, route);
+    if (!stationIds.has(route.fromStationId)) {
+      context.addIssue({ code: "custom", path: ["routes", index, "fromStationId"], message: "Unknown origin station" });
+    }
+    if (!stationIds.has(route.toStationId)) {
+      context.addIssue({ code: "custom", path: ["routes", index, "toStationId"], message: "Unknown destination station" });
+    }
+    if (route.fromStationId === route.toStationId) {
+      context.addIssue({ code: "custom", path: ["routes", index], message: "A route must connect different stations" });
+    }
+  }
+
+  const departureIds = new Set<string>();
+  for (const [index, departure] of graph.timetable.entries()) {
+    if (departureIds.has(departure.id)) {
+      context.addIssue({ code: "custom", path: ["timetable", index, "id"], message: "Departure IDs must be unique" });
+    }
+    departureIds.add(departure.id);
+    const route = routesById.get(departure.routeId);
+    if (route === undefined) {
+      context.addIssue({ code: "custom", path: ["timetable", index, "routeId"], message: "Unknown route" });
+    } else if (departure.arrivalAtMs - departure.departureAtMs !== route.durationMs) {
+      context.addIssue({
+        code: "custom",
+        path: ["timetable", index, "arrivalAtMs"],
+        message: "Arrival must match the route duration",
+      });
+    }
+  }
 });
 
 export const TransitReservationSchema = z.object({
@@ -292,6 +335,8 @@ export const MatchSnapshotSchema = z.object({
   cityCore: CityCoreSchema,
 });
 
+export const NetworkMatchSnapshotSchema = MatchSnapshotSchema.omit({ transitGraph: true });
+
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("WELCOME"),
@@ -304,8 +349,14 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     mapVersion: z.number().int().positive(),
   }),
   z.object({
+    type: z.literal("ROOM_CONFIG"),
+    matchId: z.string(),
+    seed: z.number().int(),
+    transitGraph: TransitGraphSchema,
+  }),
+  z.object({
     type: z.literal("SNAPSHOT"),
-    snapshot: MatchSnapshotSchema,
+    snapshot: NetworkMatchSnapshotSchema,
   }),
   z.object({
     type: z.literal("ERROR"),
@@ -345,6 +396,7 @@ export type AIReplayEntry = z.infer<typeof AIReplayEntrySchema>;
 export type CityCore = z.infer<typeof CityCoreSchema>;
 export type MatchStatus = z.infer<typeof MatchStatusSchema>;
 export type MatchSnapshot = z.infer<typeof MatchSnapshotSchema>;
+export type NetworkMatchSnapshot = z.infer<typeof NetworkMatchSnapshotSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 
 export function encodeMessage(message: ClientMessage | ServerMessage): string {

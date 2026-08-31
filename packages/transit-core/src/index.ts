@@ -1,7 +1,13 @@
 import { TransitGraphSchema, type TransitGraph } from "@dopagaki/contracts";
 import type { StationMetadata } from "@dopagaki/world-core";
 
-const DEPARTURE_INTERVALS_MS = [120_000, 180_000, 240_000] as const;
+export const GAME_SECONDS_PER_REAL_SECOND = 6;
+const REAL_MS_PER_GAME_MINUTE = 60_000 / GAME_SECONDS_PER_REAL_SECOND;
+const DEPARTURE_INTERVALS_MS = [
+  2 * REAL_MS_PER_GAME_MINUTE,
+  3 * REAL_MS_PER_GAME_MINUTE,
+  4 * REAL_MS_PER_GAME_MINUTE,
+] as const;
 
 function positiveModulo(value: number, divisor: number): number {
   return ((value % divisor) + divisor) % divisor;

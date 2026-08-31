@@ -6,6 +6,7 @@ import {
   type MatchSnapshot,
   type Movement,
   type NavigationEdge,
+  type NetworkMatchSnapshot,
   type Obstacle,
   type PatchEvaluation,
   type PlayerSnapshot,
@@ -766,23 +767,27 @@ function updateTransitState(state: GameState): void {
       if (reservation === null) {
         transit.phase = "ON_FOOT";
         transit.reservedFareYen = 0;
-      } else if (state.nowMs >= reservation.departureAtMs) {
+      } else {
         const station = stationById(state, reservation.fromStationId);
         if (station === undefined || distance(player.position, station.position) > STATION_INTERACTION_RADIUS) {
-          missTransitDeparture(state, player, "出発時に駅構内にいないため予約を解除");
-        } else if (transit.balanceYen < reservation.fareYen) {
-          missTransitDeparture(state, player, "乗車確定時の残高不足");
-        } else {
-          transit.balanceYen -= reservation.fareYen;
-          transit.reservedFareYen = 0;
-          transit.phase = "IN_TRANSIT";
-          transit.arrivalAtMs = reservation.arrivalAtMs;
-          reservation.status = "COMMITTED";
-          state.processedReservationIds.add(reservation.reservationId);
-          player.velocity = { x: 0, z: 0 };
-          state.lastEventId += 1;
-          state.lastEventText = `${player.displayName} が乗車（¥${reservation.fareYen}）`;
-          recordTransitReplay(state, "TRANSIT_BOARDED", `${player.displayName}: ${reservation.routeId}`);
+          missTransitDeparture(state, player, "駅構内を離れたため予約を解除");
+        } else if (state.nowMs >= reservation.departureAtMs) {
+          if (!player.connected) {
+            missTransitDeparture(state, player, "切断中に発車時刻を迎えたため予約を解除");
+          } else if (transit.balanceYen < reservation.fareYen) {
+            missTransitDeparture(state, player, "乗車確定時の残高不足");
+          } else {
+            transit.balanceYen -= reservation.fareYen;
+            transit.reservedFareYen = 0;
+            transit.phase = "IN_TRANSIT";
+            transit.arrivalAtMs = reservation.arrivalAtMs;
+            reservation.status = "COMMITTED";
+            state.processedReservationIds.add(reservation.reservationId);
+            player.velocity = { x: 0, z: 0 };
+            state.lastEventId += 1;
+            state.lastEventText = `${player.displayName} が乗車（¥${reservation.fareYen}）`;
+            recordTransitReplay(state, "TRANSIT_BOARDED", `${player.displayName}: ${reservation.routeId}`);
+          }
         }
       }
     }
@@ -1096,7 +1101,7 @@ export function stepGame(state: GameState, inputs: Inputs, deltaMs: number): voi
   if (state.nowMs >= endsAtMs) finishGame(state);
 }
 
-export function snapshotOf(state: GameState): MatchSnapshot {
+export function networkSnapshotOf(state: GameState): NetworkMatchSnapshot {
   return {
     matchId: state.matchId,
     seed: state.seed,
@@ -1119,7 +1124,6 @@ export function snapshotOf(state: GameState): MatchSnapshot {
     mapChecksum: state.mapChecksum,
     rollbackCount: state.rollbackCount,
     aiReplay: structuredClone(state.aiReplay),
-    transitGraph: structuredClone(state.transitGraph),
     players: state.players.map((player) => ({
       ...player,
       position: { ...player.position },
@@ -1134,6 +1138,13 @@ export function snapshotOf(state: GameState): MatchSnapshot {
       affectedChunkIds: [...state.cityCore.affectedChunkIds],
       activePatch: state.cityCore.activePatch === null ? null : structuredClone(state.cityCore.activePatch),
     },
+  };
+}
+
+export function snapshotOf(state: GameState): MatchSnapshot {
+  return {
+    ...networkSnapshotOf(state),
+    transitGraph: structuredClone(state.transitGraph),
   };
 }
 

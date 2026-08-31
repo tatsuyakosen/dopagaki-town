@@ -327,9 +327,33 @@ describe("authoritative tag rules", () => {
     expect(reserveTransit(game, human.id, "reservation-miss", departure.id).accepted).toBe(true);
     human.position = { x: -500, z: 0 };
     startGame(game);
-    while (game.nowMs < departure.departureAtMs) stepGame(game, {}, 50);
+    stepGame(game, {}, 50);
     expect(human.transit.phase).toBe("ON_FOOT");
     expect(human.transit.balanceYen).toBe(1_000);
+    expect(human.transit.reservation).toBeNull();
+  });
+
+  it("releases a reservation when a disconnected player misses departure", () => {
+    const game = createGame({ seed: 20260827, durationMs: 60_000, patchIntervalMs: 60_000 });
+    const human = replaceBotWithHuman(game, "human-disconnected-trip", "Disconnected Player");
+    const station = game.transitGraph.stations[0];
+    const departure = game.transitGraph.timetable.find((candidate) => {
+      const route = game.transitGraph.routes.find((item) => item.id === candidate.routeId);
+      return route?.fromStationId === station?.id;
+    });
+    expect(station).toBeDefined();
+    expect(departure).toBeDefined();
+    if (station === undefined || departure === undefined) return;
+    human.position = { ...station.position };
+    expect(reserveTransit(game, human.id, "reservation-disconnect", departure.id).accepted).toBe(true);
+    startGame(game);
+    markHumanDisconnected(game, human.id);
+
+    while (game.nowMs < departure.departureAtMs) stepGame(game, {}, 50);
+
+    expect(human.transit.phase).toBe("ON_FOOT");
+    expect(human.transit.balanceYen).toBe(1_000);
+    expect(human.transit.reservedFareYen).toBe(0);
     expect(human.transit.reservation).toBeNull();
   });
 });

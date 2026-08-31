@@ -24,7 +24,7 @@ async function moveIntoNearestStation(page: Page): Promise<void> {
   await expect(body).not.toHaveAttribute("data-current-station-id", "", { timeout: 3_000 });
 }
 
-test("players can reserve rail, reconnect, arrive, move, verify CITY CORE, and finish", async ({ page }) => {
+test("players can reserve rail, reconnect, arrive, move, verify CITY CORE, and finish", async ({ page, browser }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -55,7 +55,8 @@ test("players can reserve rail, reconnect, arrive, move, verify CITY CORE, and f
   expect(reservationId).not.toBe("");
   expect(Number(await page.locator("body").getAttribute("data-reserved-fare-yen"))).toBeGreaterThan(0);
 
-  const secondPage = await page.context().newPage();
+  const secondContext = await browser.newContext({ baseURL: new URL(page.url()).origin });
+  const secondPage = await secondContext.newPage();
   secondPage.on("pageerror", (error) => pageErrors.push(error.message));
   await secondPage.goto("/");
   await secondPage.getByLabel("CALL SIGN").fill("Second Runner");
@@ -64,7 +65,7 @@ test("players can reserve rail, reconnect, arrive, move, verify CITY CORE, and f
   await expect(page.locator("#score-list")).toContainText("Second Runner");
   await expect(page.locator("body")).toHaveAttribute("data-human-players", "2");
   await expect(secondPage.locator("#score-list")).toContainText("E2E Runner");
-  await secondPage.close();
+  await secondContext.close();
 
   await page.evaluate(() => window.dispatchEvent(new Event("dopagaki:test-disconnect")));
   await expect(page.locator("body")).toHaveAttribute("data-connection-state", "OFFLINE", { timeout: 5_000 });
