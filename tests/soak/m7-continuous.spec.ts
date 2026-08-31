@@ -1,4 +1,9 @@
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
+import {
+  classifyM7SoakGate,
+  isM7PerformanceGate,
+  m7SoakPerformanceViolations,
+} from "../../scripts/m7-soak-policy.js";
 
 interface BrowserPerformance extends Performance {
   memory?: { usedJSHeapSize: number };
@@ -33,7 +38,8 @@ const MATCHES = positiveInteger(process.env.SOAK_MATCHES, 20);
 const MATCH_DURATION_MS = positiveInteger(process.env.SOAK_MATCH_DURATION_MS, 600_000);
 const SAMPLE_MS = positiveInteger(process.env.SOAK_SAMPLE_MS, 10_000);
 const PRESET = process.env.SOAK_PRESET ?? "LOW";
-const IS_SUBMISSION_GATE = MATCHES === 20 && MATCH_DURATION_MS === 600_000 && PRESET === "LOW";
+const RUN = { matches: MATCHES, matchDurationMs: MATCH_DURATION_MS, preset: PRESET };
+const GATE = classifyM7SoakGate(RUN);
 
 test(`${MATCHES} consecutive LOW matches remain stable`, async ({ page }, testInfo) => {
   const pageErrors: string[] = [];
@@ -132,7 +138,7 @@ test(`${MATCHES} consecutive LOW matches remain stable`, async ({ page }, testIn
   const firstHeapAverage = average(endingHeaps.slice(0, 3));
   const lastHeapAverage = average(endingHeaps.slice(-3));
   const summary = {
-    gate: IS_SUBMISSION_GATE ? "M7_SUBMISSION" : "HARNESS_SMOKE",
+    gate: GATE,
     preset: PRESET,
     matchesRequested: MATCHES,
     matchesCompleted: reports.length,
@@ -168,10 +174,9 @@ test(`${MATCHES} consecutive LOW matches remain stable`, async ({ page }, testIn
   expect(reports.every((report) => report.minimumBalanceYen >= 0)).toBe(true);
   expect(summary.reconnectCount).toBe(1);
   expect(pageErrors).toEqual([]);
-  if (IS_SUBMISSION_GATE) {
-    expect(summary.averageFps).toBeGreaterThanOrEqual(20);
-    expect(summary.tenthPercentileFps).toBeGreaterThanOrEqual(18);
-    expect(summary.heapGrowth).toBeLessThan(64 * 1024 * 1024);
+  if (isM7PerformanceGate(RUN)) {
+    const violations = m7SoakPerformanceViolations(summary);
+    expect(violations, violations.join("\n")).toEqual([]);
   } else {
     expect(summary.averageFps).toBeGreaterThan(0);
     expect(firstHeapAverage).toBeGreaterThan(0);
