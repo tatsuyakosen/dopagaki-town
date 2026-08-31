@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/soak",
+  testMatch: "m6.spec.ts",
   timeout: 11 * 60 * 1_000,
   preserveOutput: "always",
   fullyParallel: false,
