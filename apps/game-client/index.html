@@ -57,6 +57,9 @@
             <small id="patch-reason">遭遇導線を再構成</small>
             <small id="patch-effect">R 250m / encounter +0% / diversity +0%</small>
           </div>
+          <button id="ai-replay-toggle" type="button" aria-controls="ai-replay-panel" aria-expanded="false">
+            AI REPLAY <b id="ai-replay-count">0</b>
+          </button>
         </aside>
 
         <aside class="score-panel glass">
@@ -85,6 +88,25 @@
         </div>
 
         <div id="danger-banner" class="danger-banner" hidden>YOU ARE ONI — 追いつけ</div>
+
+        <aside id="ai-replay-panel" class="ai-replay-panel glass" aria-labelledby="ai-replay-title" hidden>
+          <header>
+            <div>
+              <span class="eyebrow">CITY CORE AUDIT LOG</span>
+              <h2 id="ai-replay-title">AI REPLAY</h2>
+            </div>
+            <button id="ai-replay-close" type="button" aria-label="AI Replayを閉じる">×</button>
+          </header>
+          <div class="replay-summary" aria-label="AI Replay集計">
+            <span>CANDIDATE REJECT <b id="ai-replay-rejections">0</b></span>
+            <span>PATCH COMMIT <b id="ai-replay-commits">0</b></span>
+            <span>ROLLBACK <b id="ai-replay-rollbacks">0</b></span>
+            <span>RAIL EVENT <b id="ai-replay-transit">0</b></span>
+            <span>EST. COST <b id="ai-replay-cost">¥0.00</b></span>
+          </div>
+          <ol id="ai-replay-list" class="ai-replay-list"></ol>
+          <p id="ai-replay-empty" class="ai-replay-empty">監査イベントを待っています</p>
+        </aside>
       </section>
 
       <section id="result-panel" class="result-panel glass" hidden>

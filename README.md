@@ -34,6 +34,7 @@ npm run dev
 - `W` `A` `S` `D`: 移動
 - `Shift`: ダッシュ
 - `E`: 駅付近で次の便を予約／予約を取消
+- `AI REPLAY`: CITY FEEDから監査ログを開き、候補拒否・採用・Rollback・鬼交代・鉄道・概算費用を確認
 - タッチされた参加者が新しい鬼
 - 鬼交代後3秒間は再タッチ不可
 - 試合終了時に累計鬼時間が最も短い参加者が勝利
@@ -60,7 +61,7 @@ npm run verify:local
 npm run test:soak:m6
 ```
 
-E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動し、システムのGoogle ChromeをHeadlessで操作します。独立した2 browser contextでの同期、鉄道予約、通信断からの自動復帰、reload後の同一player復帰、乗車・到着、5km移動、CITY CORE警告、patch適用、checksum一致、試合終了までを検証します。
+E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動し、システムのGoogle ChromeをHeadlessで操作します。独立した2 browser contextでの同期、鉄道予約、通信断からの自動復帰、reload後の同一player復帰、乗車・到着、AI Replayの候補拒否・採用・鉄道監査、5km移動、CITY CORE警告、patch適用、checksum一致、試合終了までを検証します。
 
 ## 構成
 

@@ -116,6 +116,19 @@ test("players can reserve rail, reconnect, arrive, move, verify CITY CORE, and f
     .toBe(true);
   await expect(page.locator("body")).toHaveAttribute("data-rollback-count", "0");
   await expect
+    .poll(async () => Number(await page.locator("body").getAttribute("data-ai-replay-rejections")), { timeout: 5_000 })
+    .toBeGreaterThan(0);
+  await page.locator("#ai-replay-toggle").click();
+  await expect(page.locator("#ai-replay-panel")).toBeVisible();
+  await expect(page.locator("#ai-replay-list .replay-entry")).not.toHaveCount(0);
+  await expect(page.locator("#ai-replay-list")).toContainText("拒否 F-06");
+  await expect(page.locator("#ai-replay-list")).toContainText("採用");
+  await expect(page.locator("#ai-replay-list")).toContainText("乗車確定");
+  await expect(page.locator("#ai-replay-cost")).toContainText("¥");
+  await page.screenshot({ path: "test-results/ai-replay.png", fullPage: true });
+  await page.locator("#ai-replay-close").click();
+  await expect(page.locator("#ai-replay-panel")).toBeHidden();
+  await expect
     .poll(async () => Number(await page.locator("body").getAttribute("data-latency-p95")), { timeout: 8_000 })
     .toBeLessThanOrEqual(150);
 

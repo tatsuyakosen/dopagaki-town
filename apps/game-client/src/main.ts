@@ -70,6 +70,17 @@ const transitNext = required<HTMLElement>("#transit-next");
 const transitFare = required<HTMLElement>("#transit-fare");
 const transitAction = required<HTMLButtonElement>("#transit-action");
 const transitMessage = required<HTMLElement>("#transit-message");
+const aiReplayToggle = required<HTMLButtonElement>("#ai-replay-toggle");
+const aiReplayCount = required<HTMLElement>("#ai-replay-count");
+const aiReplayPanel = required<HTMLElement>("#ai-replay-panel");
+const aiReplayClose = required<HTMLButtonElement>("#ai-replay-close");
+const aiReplayList = required<HTMLOListElement>("#ai-replay-list");
+const aiReplayEmpty = required<HTMLElement>("#ai-replay-empty");
+const aiReplayRejections = required<HTMLElement>("#ai-replay-rejections");
+const aiReplayCommits = required<HTMLElement>("#ai-replay-commits");
+const aiReplayRollbacks = required<HTMLElement>("#ai-replay-rollbacks");
+const aiReplayTransit = required<HTMLElement>("#ai-replay-transit");
+const aiReplayCost = required<HTMLElement>("#ai-replay-cost");
 const playerPosition = required<HTMLElement>("#player-position");
 const performanceLabel = required<HTMLElement>("#performance-label");
 const dangerBanner = required<HTMLElement>("#danger-banner");
@@ -510,6 +521,7 @@ let lastKnownMatchId = persistedSession?.matchId ?? "";
 let lastScoreboardUpdateAt = Number.NEGATIVE_INFINITY;
 let lastTransitHudUpdateAt = Number.NEGATIVE_INFINITY;
 let lastTransitHudKey = "";
+let lastAiReplayKey = "";
 let lastAcknowledgedPatchKey = persistedSession?.lastAcknowledgedPatchKey ?? "";
 let enteredName = persistedSession?.playerName ?? "Runner";
 let connectionTimeoutId: number | null = null;
@@ -837,6 +849,90 @@ function syncTransitHud(snapshot: MatchSnapshot, player: PlayerSnapshot): void {
   transitMessage.textContent = "運賃は乗車時に確定します";
 }
 
+const replayPhaseLabels: Record<MatchSnapshot["aiReplay"][number]["phase"], string> = {
+  STAGE_GENERATED: "初期ステージ生成",
+  CANDIDATES_EVALUATED: "候補検証",
+  PATCH_COMMITTED: "改築採用",
+  ROLLBACK: "ロールバック",
+  TAG_CHANGED: "鬼交代",
+  TRANSIT_RESERVED: "鉄道予約",
+  TRANSIT_REJECTED: "鉄道拒否",
+  TRANSIT_BOARDED: "乗車確定",
+  TRANSIT_ARRIVED: "到着",
+  TRANSIT_CANCELLED: "予約取消",
+};
+
+function replayGroup(phase: MatchSnapshot["aiReplay"][number]["phase"]): "city" | "transit" | "rollback" {
+  if (phase === "ROLLBACK") return "rollback";
+  return phase.startsWith("TRANSIT_") ? "transit" : "city";
+}
+
+function syncAiReplay(snapshot: MatchSnapshot): void {
+  const replayKey = `${snapshot.matchId}:${snapshot.aiReplay.length}:${snapshot.aiReplay.at(-1)?.sequence ?? -1}`;
+  if (replayKey === lastAiReplayKey) return;
+  lastAiReplayKey = replayKey;
+
+  const rejectedCandidates = snapshot.aiReplay.reduce(
+    (total, entry) => total + entry.candidates.filter((candidate) => !candidate.accepted).length,
+    0,
+  );
+  const commits = snapshot.aiReplay.filter((entry) => entry.phase === "PATCH_COMMITTED").length;
+  const rollbacks = snapshot.aiReplay.filter((entry) => entry.phase === "ROLLBACK").length;
+  const transitEvents = snapshot.aiReplay.filter((entry) => entry.phase.startsWith("TRANSIT_")).length;
+  const estimatedCostYen = snapshot.aiReplay.reduce((total, entry) => total + entry.estimatedCostYen, 0);
+  aiReplayCount.textContent = String(snapshot.aiReplay.length);
+  aiReplayRejections.textContent = String(rejectedCandidates);
+  aiReplayCommits.textContent = String(commits);
+  aiReplayRollbacks.textContent = String(rollbacks);
+  aiReplayTransit.textContent = String(transitEvents);
+  aiReplayCost.textContent = `¥${estimatedCostYen.toFixed(2)}`;
+  document.body.dataset.aiReplayEntries = String(snapshot.aiReplay.length);
+  document.body.dataset.aiReplayRejections = String(rejectedCandidates);
+  document.body.dataset.aiReplayCommits = String(commits);
+  document.body.dataset.aiReplayRollbacks = String(rollbacks);
+  document.body.dataset.aiReplayTransit = String(transitEvents);
+
+  const items = [...snapshot.aiReplay].reverse().map((entry) => {
+    const item = document.createElement("li");
+    item.className = "replay-entry";
+    item.dataset.phase = entry.phase;
+    item.dataset.group = replayGroup(entry.phase);
+    const header = document.createElement("header");
+    const time = document.createElement("time");
+    time.textContent = formatTime(entry.atMs);
+    const phase = document.createElement("strong");
+    phase.textContent = replayPhaseLabels[entry.phase];
+    const metrics = document.createElement("small");
+    metrics.textContent = `${entry.latencyMs.toFixed(0)}ms / ¥${entry.estimatedCostYen.toFixed(2)}`;
+    header.append(time, phase, metrics);
+    const summary = document.createElement("p");
+    summary.textContent = entry.summary;
+    item.append(header, summary);
+
+    if (entry.candidates.length > 0) {
+      const candidates = document.createElement("ul");
+      candidates.className = "replay-candidates";
+      for (const candidate of entry.candidates) {
+        const candidateItem = document.createElement("li");
+        candidateItem.className = "replay-candidate";
+        const selected = candidate.patch.patchId === entry.selectedPatchId;
+        candidateItem.dataset.result = selected ? "selected" : candidate.accepted ? "not-selected" : "rejected";
+        const operation = document.createElement("b");
+        operation.textContent = candidate.patch.operations.map((value) => value.type).join(" + ");
+        const result = document.createElement("span");
+        const violationIds = candidate.violations.map((violation) => violation.id).join(", ");
+        result.textContent = selected ? "採用" : candidate.accepted ? "未採用" : `拒否 ${violationIds}`;
+        candidateItem.append(operation, result);
+        candidates.append(candidateItem);
+      }
+      item.append(candidates);
+    }
+    return item;
+  });
+  aiReplayList.replaceChildren(...items);
+  aiReplayEmpty.hidden = items.length > 0;
+}
+
 function syncSnapshot(snapshot: MatchSnapshot): void {
   if (lastKnownMatchId.length > 0 && snapshot.matchId !== lastKnownMatchId) {
     lastEventId = -1;
@@ -855,6 +951,7 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
     snapshot.players.filter((player) => player.kind === "HUMAN" && player.connected).length,
   );
   document.body.dataset.lastEventId = String(snapshot.lastEventId);
+  syncAiReplay(snapshot);
 
   const localPlayer = snapshot.players.find((player) => player.id === localPlayerId);
   if (localPlayer !== undefined) {
@@ -1012,7 +1109,28 @@ transitAction.addEventListener("click", () => {
   });
 });
 
+function setAiReplayOpen(open: boolean): void {
+  aiReplayPanel.hidden = !open;
+  aiReplayToggle.setAttribute("aria-expanded", String(open));
+  document.body.dataset.aiReplayOpen = String(open);
+  if (open) {
+    keys.clear();
+    aiReplayClose.focus();
+  } else {
+    aiReplayToggle.focus();
+  }
+}
+
+aiReplayToggle.addEventListener("click", () => setAiReplayOpen(Boolean(aiReplayPanel.hidden)));
+aiReplayClose.addEventListener("click", () => setAiReplayOpen(false));
+
 window.addEventListener("keydown", (event) => {
+  if (event.code === "Escape" && !aiReplayPanel.hidden) {
+    setAiReplayOpen(false);
+    event.preventDefault();
+    return;
+  }
+  if (!aiReplayPanel.hidden) return;
   if (event.code === "KeyE" && !event.repeat && !hud.hidden) {
     transitAction.click();
     event.preventDefault();
