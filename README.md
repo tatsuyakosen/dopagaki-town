@@ -44,7 +44,9 @@ npm run dev
 ## 検証
 
 ```bash
+npm run lint
 npm run typecheck
+npm run test:faults
 npm test
 npm run test:headless
 npm run build
@@ -64,6 +66,43 @@ npm run test:soak:m6
 ```
 
 E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動し、システムのGoogle ChromeをHeadlessで操作します。Guest Mode、サーバー確定のデモ設定、独立した2 browser contextでの同期、鉄道予約、通信断からの自動復帰、reload後の同一player復帰、乗車・到着、AI Replayの候補拒否・採用・鉄道監査、5km移動、CITY CORE警告、patch適用、checksum一致、試合終了までを検証します。
+
+### 必須異常系 T-01〜T-10
+
+`npm run test:faults`は、要件定義書の必須異常系だけを個別に実行します。`verify:local`にも同じgateを含めています。
+
+| ID | 注入する障害 | サーバー／game-coreの期待結果 | 自動テスト |
+|---|---|---|---|
+| T-01 | 同一tickで鬼が2人の逃走者へ接触 | 鬼交代eventは1件、鬼は常に1人 | `packages/game-core/test/game.test.ts` |
+| T-02 | 運賃未満の残高で予約 | 予約拒否、残高不変、徒歩継続 | `packages/game-core/test/game.test.ts` |
+| T-03 | 予約直後に切断・再接続 | holdと`reservationId`を重複・消失させない | `apps/match-server/test/room.test.ts` |
+| T-04 | 乗車中のRoom checkpointを復元 | 到着時刻、残高、交通状態を維持 | `apps/match-server/test/room.test.ts` |
+| T-05 | 駅構内を対象にするPatch候補 | F-06で拒否し、安全な別候補を採用 | `packages/verifier/test/verifier.test.ts` |
+| T-06 | 1人だけの最短経路を50%以上悪化 | F-04で拒否し、安全な別候補を採用 | `packages/verifier/test/verifier.test.ts` |
+| T-07 | 古い`baseMapVersion`／再利用`patchId` | 状態を変えずVERSION／DUPLICATEとして拒否 | `packages/verifier/test/verifier.test.ts` |
+| T-08 | クライアントchecksumを改変 | 直前MapVersionへRollback | `packages/game-core/test/game.test.ts` |
+| T-09 | Director timeout／不正JSON | 同じSeedのルールベースFixtureへfallback | `packages/verifier/test/verifier.test.ts` |
+| T-10 | Transit Adapter timeout | 6駅のFixture Graphへfallbackし試合を継続可能 | `packages/transit-core/test/transit.test.ts` |
+
+## トラブルシュート
+
+| 症状 | 確認と対処 |
+|---|---|
+| `npm run dev`直後も`SERVER OFFLINE`と表示される | Node.js 22を使用し、Match Serverのport 3001が空いているか確認します。別portを使う場合は`PORT`と`VITE_MATCH_PORT`を同じ値にします。 |
+| ブラウザをreloadすると`SESSION EXPIRED`になる | 再接続windowは30秒です。再度「ゲストで入城する」を押すと新しい参加者として開始します。 |
+| 鉄道ボタンが有効にならない | 駅から180m以内へ移動し、残高と次の便を確認します。駅付近ではボタンまたは`E`キーで予約できます。 |
+| E2EがChrome executableエラーで開始しない | `/usr/bin/google-chrome`を利用できるPC環境で実行するか、Playwright設定の`executablePath`を手元のChromeへ合わせます。 |
+| FPSが20を下回る | `.env.example`の`VITE_RENDER_SCALE`を大きくして内部解像度を下げ、Chrome以外の重いタブを閉じます。LOWでは影を使用しません。 |
+| portを変更したらクライアントだけ接続できない | `VITE_MATCH_WS_URL=ws://127.0.0.1:<port>/ws`を明示し、clientを再起動します。 |
+
+## 既知の制約
+
+- ローカルMatch Serverは単一のin-memory Roomです。マッチメイク、複数Room、ランキングは対象外です。
+- Room checkpointは同一プロセス内の復元用です。Match Serverプロセス再起動後の永続復旧は未対応です。
+- Directorと鉄道は既定で決定論的Fixtureを使用します。Gemini／ADK、実ダイヤ、遅延・運休、駅すぱあとMCPには接続しません。
+- 都市はLOW向け低ポリ表示です。大阪Photorealistic 3D Tilesと駅構内3Dは未統合です。
+- 操作対象はPCブラウザとキーボードです。モバイル操作、ゲームパッド、音声チャットは対象外です。
+- 外部APIキー、Docker、Google Cloud、Firestore Emulatorを使わないローカルMVPです。
 
 ## 構成
 

@@ -46,6 +46,27 @@ describe("authoritative tag rules", () => {
     expect(game.players.filter((player) => player.role === "ONI")).toHaveLength(1);
   });
 
+  it("[T-01] commits only one tag when two runners overlap the oni in the same tick", () => {
+    const game = createGame({ seed: 20260827, durationMs: 10_000 });
+    for (const player of game.players) player.kind = "HUMAN";
+    const oni = game.players.find((player) => player.role === "ONI");
+    const runners = game.players.filter((player) => player.role === "RUNNER");
+    expect(oni).toBeDefined();
+    expect(runners).toHaveLength(3);
+    if (oni === undefined) return;
+    oni.position = { x: 0, z: 0 };
+    for (const runner of runners.slice(0, 2)) runner.position = { x: 1, z: 0 };
+    startGame(game);
+    const eventIdBeforeTag = game.lastEventId;
+
+    stepGame(game, {}, 50);
+
+    expect(game.lastEventId).toBe(eventIdBeforeTag + 1);
+    expect(game.players.filter((player) => player.role === "ONI")).toHaveLength(1);
+    expect(runners.filter((player) => player.role === "ONI")).toHaveLength(1);
+    expect(game.tagLockedUntilMs).toBe(game.nowMs + TAG_PROTECTION_MS);
+  });
+
   it("finishes with the shortest oni duration as winner", () => {
     const game = createGame({ seed: 10, durationMs: 500 });
     startGame(game);
@@ -127,7 +148,7 @@ describe("authoritative tag rules", () => {
     expect(game.obstacles.find((obstacle) => obstacle.id === "bridge-core")?.active).toBe(true);
   });
 
-  it("rolls back to the previous MapVersion on a client checksum mismatch", () => {
+  it("[T-08] rolls back to the previous MapVersion on a client checksum mismatch", () => {
     for (let seed = 1; seed <= 10; seed += 1) {
       const game = createGame({ seed, durationMs: 7_000, patchIntervalMs: 6_000 });
       startGame(game);
@@ -205,7 +226,7 @@ describe("authoritative tag rules", () => {
     expect(checksumOf(restored)).toBe(checksumOf(original));
   });
 
-  it("reserves fare idempotently and rejects insufficient balance without changing it", () => {
+  it("[T-02] rejects insufficient fare without changing balance or walking state", () => {
     const game = createGame({ seed: 20260827, durationMs: 60_000 });
     const human = replaceBotWithHuman(game, "human-transit", "Transit Player");
     const station = game.transitGraph.stations[0];
@@ -225,6 +246,7 @@ describe("authoritative tag rules", () => {
     expect(rejected).toMatchObject({ accepted: false, code: "INSUFFICIENT_BALANCE" });
     expect(human.transit.balanceYen).toBe(route.fareYen - 1);
     expect(human.transit.reservedFareYen).toBe(0);
+    expect(human.transit.phase).toBe("ON_FOOT");
 
     human.transit.balanceYen = 1_000;
     const accepted = reserveTransit(game, human.id, "reservation-ok", departure.id);

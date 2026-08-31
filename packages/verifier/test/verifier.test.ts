@@ -7,6 +7,7 @@ import {
 import {
   createFixturePatchCandidates,
   evaluatePatch,
+  resolveDirectorPlan,
   selectPatchCandidate,
   type VerifierContext,
 } from "../src/index.js";
@@ -47,13 +48,21 @@ function validPatch(testContext = context()): MapPatch {
 }
 
 describe("F-01 through F-08 map patch verifier", () => {
-  it("rejects station and biased candidates, then selects the valid fixture candidate", () => {
+  it("[T-05] rejects a station candidate with F-06 and selects the valid fixture candidate", () => {
     const testContext = context();
     const candidates = createFixturePatchCandidates(0, testContext);
     const decision = selectPatchCandidate(candidates, testContext);
 
     expect(candidates).toHaveLength(3);
     expect(decision.evaluations[0]?.violations.map((violation) => violation.id)).toContain("F-06");
+    expect(decision.selected?.patchId).toBe(candidates[2]?.patchId);
+  });
+
+  it("[T-06] rejects a player-biased candidate with F-04 and selects the valid fixture candidate", () => {
+    const testContext = context();
+    const candidates = createFixturePatchCandidates(0, testContext);
+    const decision = selectPatchCandidate(candidates, testContext);
+
     expect(decision.evaluations[1]?.violations.map((violation) => violation.id)).toContain("F-04");
     expect(decision.selected?.patchId).toBe(candidates[2]?.patchId);
   });
@@ -117,11 +126,57 @@ describe("F-01 through F-08 map patch verifier", () => {
     expect(evaluatePatch(patch, context()).violations.map((violation) => violation.id)).toContain("F-08");
   });
 
-  it("rejects stale versions and duplicate patch IDs", () => {
+  it("[T-07] rejects stale versions and duplicate patch IDs without mutating the context", () => {
     const patch = validPatch();
     const testContext = context({ currentMapVersion: 2, appliedPatchIds: new Set([patch.patchId]) });
+    const before = structuredClone({
+      obstacles: testContext.obstacles,
+      navigationEdges: testContext.navigationEdges,
+      currentMapVersion: testContext.currentMapVersion,
+    });
     const violations = evaluatePatch(patch, testContext).violations.map((violation) => violation.id);
     expect(violations).toContain("VERSION");
     expect(violations).toContain("DUPLICATE");
+    expect({
+      obstacles: testContext.obstacles,
+      navigationEdges: testContext.navigationEdges,
+      currentMapVersion: testContext.currentMapVersion,
+    }).toEqual(before);
+  });
+
+  it("[T-09] falls back to the deterministic fixture after Director timeout or malformed JSON", async () => {
+    const testContext = context();
+    const options = { seed: 20260827, sequence: 0, context: testContext };
+    const expected = await resolveDirectorPlan(options);
+    const timedOut = await resolveDirectorPlan({
+      ...options,
+      timeoutMs: 5,
+      loadExternal: () => new Promise(() => undefined),
+    });
+    const malformed = await resolveDirectorPlan({
+      ...options,
+      loadExternal: () => Promise.resolve("{not-json"),
+    });
+
+    expect(timedOut).toEqual(expected);
+    expect(malformed).toEqual(expected);
+    expect(timedOut.source).toBe("FIXTURE");
+    expect(selectPatchCandidate(timedOut.candidates, testContext).selected?.patchId).toBe("patch-1-valid");
+  });
+
+  it("accepts a schema-valid Director response but still leaves patch selection to the verifier", async () => {
+    const testContext = context();
+    const options = { seed: 20260827, sequence: 0, context: testContext };
+    const fixture = await resolveDirectorPlan(options);
+    const external = await resolveDirectorPlan({
+      ...options,
+      loadExternal: () => Promise.resolve(JSON.stringify({
+        stageSpec: fixture.stageSpec,
+        candidates: fixture.candidates,
+      })),
+    });
+
+    expect(external.source).toBe("EXTERNAL");
+    expect(selectPatchCandidate(external.candidates, testContext).selected?.patchId).toBe("patch-1-valid");
   });
 });

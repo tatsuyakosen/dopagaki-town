@@ -1,14 +1,20 @@
-import type {
-  ConstraintViolation,
-  MapPatch,
-  MapPatchOperation,
-  NavigationEdge,
-  Obstacle,
-  PatchEvaluation,
-  PlayerSnapshot,
-  StageSpec,
-  WorldSpec,
+import {
+  MapPatchSchema,
+  StageSpecSchema,
+  type ConstraintViolation,
+  type MapPatch,
+  type MapPatchOperation,
+  type NavigationEdge,
+  type Obstacle,
+  type PatchEvaluation,
+  type PlayerSnapshot,
+  type StageSpec,
+  type WorldSpec,
 } from "@dopagaki/contracts";
+/*
+ * External Director output is allowed to propose only schema-valid data. The
+ * deterministic verifier below remains the authority for accepting a patch.
+ */
 import {
   chunkAtPosition,
   chunkId,
@@ -37,6 +43,20 @@ export interface VerifierContext {
 export interface PatchSelection {
   evaluations: PatchEvaluation[];
   selected: MapPatch | null;
+}
+
+export interface DirectorPlan {
+  source: "FIXTURE" | "EXTERNAL";
+  stageSpec: StageSpec;
+  candidates: MapPatch[];
+}
+
+export interface DirectorResolverOptions {
+  seed: number;
+  sequence: number;
+  context: VerifierContext;
+  timeoutMs?: number;
+  loadExternal?: () => Promise<unknown>;
 }
 
 function cloneObstacle(obstacle: Obstacle): Obstacle {
@@ -341,4 +361,50 @@ export function createFixturePatchCandidates(
     { encounterRatePct: 12, routeDiversityPct: operationIndex === 0 ? 3 : 14 }, context.world,
   );
   return [stationCandidate, biasedCandidate, validCandidate];
+}
+
+function fixtureDirectorPlan(options: DirectorResolverOptions): DirectorPlan {
+  return {
+    source: "FIXTURE",
+    stageSpec: createFixtureStageSpec(
+      options.seed,
+      options.context.metadata,
+      options.context.players,
+      options.context.world,
+    ),
+    candidates: createFixturePatchCandidates(options.sequence, options.context),
+  };
+}
+
+function parseExternalDirectorPlan(raw: unknown, options: DirectorResolverOptions): DirectorPlan {
+  const decoded: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (typeof decoded !== "object" || decoded === null) throw new Error("Director response must be an object");
+  const record = decoded as Record<string, unknown>;
+  const stageSpec = StageSpecSchema.parse(record.stageSpec);
+  if (stageSpec.seed !== options.seed) throw new Error("Director response seed does not match the Room seed");
+  if (!Array.isArray(record.candidates) || record.candidates.length < 1 || record.candidates.length > 3) {
+    throw new Error("Director response must contain one to three candidates");
+  }
+  const candidates = record.candidates.map((candidate) => MapPatchSchema.parse(candidate));
+  if (candidates.some((candidate) => candidate.baseMapVersion !== options.context.currentMapVersion)) {
+    throw new Error("Director response baseMapVersion is stale");
+  }
+  return { source: "EXTERNAL", stageSpec, candidates };
+}
+
+export async function resolveDirectorPlan(options: DirectorResolverOptions): Promise<DirectorPlan> {
+  const fallback = fixtureDirectorPlan(options);
+  if (options.loadExternal === undefined) return fallback;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Director adapter timeout")), options.timeoutMs ?? 1_000);
+    });
+    const raw = await Promise.race([options.loadExternal(), timeout]);
+    return parseExternalDirectorPlan(raw, options);
+  } catch {
+    return fallback;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

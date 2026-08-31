@@ -210,7 +210,7 @@ describe("authoritative reconnect room", () => {
     expect(restored.game.status).toBe("RUNNING");
   });
 
-  it("keeps a reserved fare exactly once across disconnect and reconnect", () => {
+  it("[T-03] keeps a reserved fare exactly once across disconnect and reconnect", () => {
     const { room } = roomFixture();
     const joined = room.join("connection-1", { type: "JOIN", playerName: "Rail Player" });
     expect(joined.ok).toBe(true);
@@ -246,6 +246,50 @@ describe("authoritative reconnect room", () => {
     });
     expect(player.transit.reservedFareYen).toBe(reservedFare);
     expect(player.transit.balanceYen).toBe(1_000);
+  });
+
+  it("[T-04] restores an in-transit Room checkpoint with the same arrival and balance", () => {
+    const { room } = roomFixture();
+    const joined = room.join("connection-trip", { type: "JOIN", playerName: "Checkpoint Rail Player" });
+    expect(joined.ok).toBe(true);
+    if (!joined.ok) return;
+    const player = room.game.players.find((candidate) => candidate.id === joined.welcome.playerId);
+    const station = room.game.transitGraph.stations[0];
+    const departure = room.game.transitGraph.timetable.find((candidate) => {
+      const route = room.game.transitGraph.routes.find((item) => item.id === candidate.routeId);
+      return route?.fromStationId === station?.id;
+    });
+    expect(player).toBeDefined();
+    expect(station).toBeDefined();
+    expect(departure).toBeDefined();
+    if (player === undefined || station === undefined || departure === undefined) return;
+    player.position = { ...station.position };
+    expect(room.reserveTransit("connection-trip", "checkpoint-trip", departure.id)).toMatchObject({
+      accepted: true,
+      code: "RESERVED",
+    });
+    while (room.game.nowMs < departure.departureAtMs) room.tick(50);
+    expect(player.transit.phase).toBe("IN_TRANSIT");
+
+    const checkpoint = room.checkpoint();
+    const restored = MatchRoom.restore(checkpoint, {
+      seed: 20260827,
+      durationMs: 60_000,
+      demoSeed: 777,
+      demoDurationMs: 180_000,
+      patchIntervalMs: 20_000,
+      humanSpeedMultiplier: 1,
+      now: () => checkpoint.capturedAtMs,
+      tokenFactory: () => "8".repeat(48),
+    });
+    const restoredPlayer = restored.game.players.find((candidate) => candidate.id === player.id);
+    expect(restoredPlayer?.transit).toEqual(player.transit);
+    expect(restoredPlayer?.transit.arrivalAtMs).toBe(departure.arrivalAtMs);
+    expect(restoredPlayer?.transit.balanceYen).toBe(player.transit.balanceYen);
+
+    while (restored.game.nowMs < departure.arrivalAtMs) restored.tick(50);
+    expect(restoredPlayer?.transit.phase).toBe("ARRIVING");
+    expect(restoredPlayer?.transit.balanceYen).toBe(player.transit.balanceYen);
   });
 
   it("sends the fixed transit graph separately from 10Hz snapshots", () => {

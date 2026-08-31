@@ -35,7 +35,7 @@ describe("transit fixture", () => {
     }
   });
 
-  it("falls back to the fixture after an adapter timeout", async () => {
+  it("[T-10] falls back to a playable fixture graph after an adapter timeout", async () => {
     const graph = await resolveTransitGraph({
       seed: 42,
       stations,
@@ -44,5 +44,7 @@ describe("transit fixture", () => {
     });
     expect(graph.source).toBe("FIXTURE");
     expect(graph.stations).toHaveLength(6);
+    expect(graph.routes).toHaveLength(12);
+    expect(graph.timetable.length).toBeGreaterThan(0);
   });
 });
