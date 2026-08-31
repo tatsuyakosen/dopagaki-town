@@ -4,18 +4,13 @@ import {
   isM7PerformanceGate,
   m7SoakPerformanceViolations,
 } from "../../scripts/m7-soak-policy.js";
+import { formatM7SoakProgress, type M7SoakProgressSample } from "../../scripts/m7-soak-progress.js";
 
 interface BrowserPerformance extends Performance {
   memory?: { usedJSHeapSize: number };
 }
 
-interface Sample {
-  fps: number;
-  heapBytes: number;
-  loadedChunks: number;
-  activeChunks: number;
-  reconciliationError: number;
-}
+type Sample = M7SoakProgressSample;
 
 interface MatchReport {
   match: number;
@@ -37,11 +32,13 @@ interface MatchReport {
 const MATCHES = positiveInteger(process.env.SOAK_MATCHES, 20);
 const MATCH_DURATION_MS = positiveInteger(process.env.SOAK_MATCH_DURATION_MS, 600_000);
 const SAMPLE_MS = positiveInteger(process.env.SOAK_SAMPLE_MS, 10_000);
+const PROGRESS_MS = positiveInteger(process.env.SOAK_PROGRESS_MS, 60_000);
 const PRESET = process.env.SOAK_PRESET ?? "LOW";
 const RUN = { matches: MATCHES, matchDurationMs: MATCH_DURATION_MS, preset: PRESET };
 const GATE = classifyM7SoakGate(RUN);
 
 test(`${MATCHES} consecutive LOW matches remain stable`, async ({ page }, testInfo) => {
+  const runStartedAt = Date.now();
   const pageErrors: string[] = [];
   const reports: MatchReport[] = [];
   const allSamples: Sample[] = [];
@@ -65,6 +62,18 @@ test(`${MATCHES} consecutive LOW matches remain stable`, async ({ page }, testIn
     const seed = Number(await seedLabel.textContent());
     const samples: Sample[] = [];
     const sampleCount = Math.ceil(MATCH_DURATION_MS / SAMPLE_MS);
+    const progressEverySamples = Math.max(1, Math.ceil(PROGRESS_MS / SAMPLE_MS));
+    writeProgress({
+      phase: "MATCH_STARTED",
+      gate: GATE,
+      match: matchIndex + 1,
+      matchesRequested: MATCHES,
+      seed,
+      runElapsedMs: Date.now() - runStartedAt,
+      matchElapsedMs: 0,
+      samplesCompleted: 0,
+      samplesExpected: sampleCount,
+    });
 
     for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
       if (await body.getAttribute("data-match-status") === "FINISHED") break;
@@ -80,6 +89,20 @@ test(`${MATCHES} consecutive LOW matches remain stable`, async ({ page }, testIn
       const sample = await readSample(page);
       samples.push(sample);
       allSamples.push(sample);
+      if ((sampleIndex + 1) % progressEverySamples === 0) {
+        writeProgress({
+          phase: "HEARTBEAT",
+          gate: GATE,
+          match: matchIndex + 1,
+          matchesRequested: MATCHES,
+          seed,
+          runElapsedMs: Date.now() - runStartedAt,
+          matchElapsedMs: Date.now() - startedAt,
+          samplesCompleted: samples.length,
+          samplesExpected: sampleCount,
+          latest: sample,
+        });
+      }
 
       const reconnectMatch = Math.floor(MATCHES / 2);
       const reconnectSample = Math.floor(sampleCount / 2);
@@ -122,6 +145,19 @@ test(`${MATCHES} consecutive LOW matches remain stable`, async ({ page }, testIn
     };
     reports.push(report);
     await attachReport(testInfo, `match-${String(matchIndex + 1).padStart(2, "0")}`, report);
+    const latest = samples.at(-1);
+    writeProgress({
+      phase: "MATCH_COMPLETED",
+      gate: GATE,
+      match: matchIndex + 1,
+      matchesRequested: MATCHES,
+      seed,
+      runElapsedMs: Date.now() - runStartedAt,
+      matchElapsedMs: report.elapsedWallMs,
+      samplesCompleted: samples.length,
+      samplesExpected: sampleCount,
+      ...(latest === undefined ? {} : { latest }),
+    });
 
     if (matchIndex < MATCHES - 1) {
       const previousSeed = String(seed);
@@ -231,4 +267,8 @@ function maximum(values: number[]): number {
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? String(fallback), 10);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function writeProgress(progress: Parameters<typeof formatM7SoakProgress>[0]): void {
+  process.stdout.write(`${formatM7SoakProgress(progress)}\n`);
 }

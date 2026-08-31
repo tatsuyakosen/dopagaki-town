@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const values: { matches: number; preset: string; durationMs: number; sampleMs: number } = {
+const values: { matches: number; preset: string; durationMs: number; sampleMs: number; progressMs: number } = {
   matches: 20,
   preset: "LOW",
   durationMs: 600_000,
   sampleMs: 10_000,
+  progressMs: 60_000,
 };
 const args = process.argv.slice(2);
 
@@ -20,6 +21,7 @@ for (let index = 0; index < args.length; index += 1) {
   else if (flag === "--preset") values.preset = value.toUpperCase();
   else if (flag === "--duration-ms") values.durationMs = positiveInteger(flag, value);
   else if (flag === "--sample-ms") values.sampleMs = positiveInteger(flag, value);
+  else if (flag === "--progress-ms") values.progressMs = positiveInteger(flag, value);
   else throw new Error(`Unknown soak option: ${flag}`);
 }
 
@@ -35,6 +37,7 @@ const exitCode = await new Promise<number>((resolve, reject) => {
       SOAK_PRESET: values.preset,
       SOAK_MATCH_DURATION_MS: String(values.durationMs),
       SOAK_SAMPLE_MS: String(values.sampleMs),
+      SOAK_PROGRESS_MS: String(values.progressMs),
     },
     stdio: "inherit",
   });

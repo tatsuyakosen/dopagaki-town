@@ -26,7 +26,7 @@
     "test:e2e": "playwright test",
     "test:soak:m6": "playwright test --config playwright.soak.config.ts",
     "test:soak": "tsx scripts/run-m7-soak.ts",
-    "test:soak:smoke": "tsx scripts/run-m7-soak.ts --matches=2 --duration-ms=30000 --sample-ms=1000",
+    "test:soak:smoke": "tsx scripts/run-m7-soak.ts --matches=2 --duration-ms=30000 --sample-ms=1000 --progress-ms=10000",
     "verify:local": "npm run lint && npm run typecheck && npm run test:faults && npm test && npm run build && npm run test:e2e"
   },
   "devDependencies": {

@@ -75,6 +75,8 @@ npm run test:soak -- --matches=20 --preset=LOW
 
 提出gateは実時間で約3時間20分、短縮gateは約1時間40分に加えて起動・集計時間が必要です。通常の`verify:local`には含めません。各試合で終了、Seed更新、同一player維持、MapVersion進行、checksum一致、rollback 0、残高非負を確認します。10分LOW実行では試合数にかかわらず、全体で平均20fps以上、下位10%点18fps以上、先頭3試合と末尾3試合のheap増加64MB未満、loaded最大25／active最大9を自動判定します。中間試合では通信断も1回注入します。`M7_SHORTENED`は提出gate完了の代替にはなりません。
 
+実行中は`M7_CONTINUOUS_SOAK_PROGRESS`として試合開始・完了と既定60秒ごとのheartbeatを出力します。現在の試合番号、Seed、全体／試合経過時間、sample進捗、直近のFPS・heap・chunk・reconciliationをJSONで確認できます。間隔は例として`--progress-ms=30000`のように変更できます。
+
 E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動し、システムのGoogle ChromeをHeadlessで操作します。Guest Mode、サーバー確定のデモ設定、独立した2 browser contextでの同期、鉄道予約、通信断からの自動復帰、reload後の同一player復帰、乗車・到着、AI Replayの候補拒否・採用・鉄道監査、5km移動、CITY CORE警告、patch適用、checksum一致、試合終了までを検証します。
 
 ### 必須異常系 T-01〜T-10
