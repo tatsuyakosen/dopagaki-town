@@ -12,7 +12,11 @@ import { WebSocket, WebSocketServer } from "ws";
 import { MatchRoom } from "./room.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "3001", 10);
-const MATCH_DURATION_MS = Number.parseInt(process.env.MATCH_DURATION_MS ?? "600000", 10);
+const STANDARD_MATCH_DURATION_MS = Number.parseInt(
+  process.env.STANDARD_MATCH_DURATION_MS ?? process.env.MATCH_DURATION_MS ?? "600000",
+  10,
+);
+const DEMO_MATCH_DURATION_MS = Number.parseInt(process.env.DEMO_MATCH_DURATION_MS ?? "180000", 10);
 const PATCH_INTERVAL_MS = Number.parseInt(process.env.PATCH_INTERVAL_MS ?? "20000", 10);
 const configuredHumanSpeedMultiplier = Number.parseFloat(process.env.HUMAN_SPEED_MULTIPLIER ?? "1");
 const HUMAN_SPEED_MULTIPLIER = Number.isFinite(configuredHumanSpeedMultiplier) && configuredHumanSpeedMultiplier > 0
@@ -20,11 +24,17 @@ const HUMAN_SPEED_MULTIPLIER = Number.isFinite(configuredHumanSpeedMultiplier) &
   : 1;
 const TICK_MS = 50;
 const SNAPSHOT_MS = 100;
-const INITIAL_SEED = Number.parseInt(process.env.MATCH_SEED ?? "20260827", 10);
+const STANDARD_SEED = Number.parseInt(
+  process.env.STANDARD_MATCH_SEED ?? process.env.MATCH_SEED ?? "20260831",
+  10,
+);
+const DEMO_SEED = Number.parseInt(process.env.DEMO_MATCH_SEED ?? "20260827", 10);
 
 const room = new MatchRoom({
-  seed: INITIAL_SEED,
-  durationMs: MATCH_DURATION_MS,
+  seed: STANDARD_SEED,
+  durationMs: STANDARD_MATCH_DURATION_MS,
+  demoSeed: DEMO_SEED,
+  demoDurationMs: DEMO_MATCH_DURATION_MS,
   patchIntervalMs: PATCH_INTERVAL_MS,
   humanSpeedMultiplier: HUMAN_SPEED_MULTIPLIER,
 });
@@ -48,6 +58,8 @@ function roomConfigMessage(): ServerMessage {
   return {
     type: "ROOM_CONFIG",
     matchId: room.game.matchId,
+    matchMode: room.matchMode,
+    durationMs: room.game.durationMs,
     seed: room.game.seed,
     transitGraph: room.game.transitGraph,
   };

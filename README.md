@@ -2,7 +2,9 @@
 
 PLAYER vs PLAYER vs CITY — 街そのものが試合へ介入する、ローカルファーストのマルチプレイヤー鬼ごっこです。
 
-現在のM6縦切りでは、5km×5kmを250m角の400論理チャンクとして構成します。クライアントは進行方向の5×5を先読みし、3×3だけを低ポリ建物・簡略Colliderのactive範囲として実体化します。後方チャンクは破棄され、遠方参加者は441 nodeの広域道路グラフ上だけで更新されます。
+現在のM7提出品質では、アカウント登録なしのGuest Modeから、固定Seedの3分デモまたは10分通常試合へ入城できます。最初のGuestが選んだモードをMatch ServerがRoom設定として確定し、後から参加するクライアントがSeedや試合時間を上書きすることはできません。
+
+5km×5kmを250m角の400論理チャンクとして構成します。クライアントは進行方向の5×5を先読みし、3×3だけを低ポリ建物・簡略Colliderのactive範囲として実体化します。後方チャンクは破棄され、遠方参加者は441 nodeの広域道路グラフ上だけで更新されます。
 
 Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確定します。Fixture Directorは最大3件の都市介入候補を生成し、VerifierがF-01〜F-08、A*経路探索、3戦略rolloutで検証して1件だけを採用します。CITY COREは5秒以上前に範囲・理由・期待効果を告知し、`raise_barrier`、`open_alley`、`spawn_rooftop_bridge`をprepare後に一括commitします。クライアントchecksumが一致しない場合は直前の地図へrollbackします。
 
@@ -18,7 +20,7 @@ Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確�
 
 外部APIキー、Docker、Google Cloud、Firestore Emulatorは不要です。
 
-環境変数はすべて任意です。未設定時はMatch Serverのポート、固定Seed、10分試合、CITY CORE間隔、LOW描画倍率にコード内の既定値が使われます。上書き例は `.env.example` にあります。
+環境変数はすべて任意です。未設定時はMatch Serverのポート、3分デモ固定Seed、10分通常Seed、各試合時間、CITY CORE間隔、LOW描画倍率にコード内の既定値が使われます。上書き例は `.env.example` にあります。従来の`MATCH_SEED`と`MATCH_DURATION_MS`は通常試合の上書きとして引き続き利用できます。
 
 ## 起動
 
@@ -27,7 +29,7 @@ npm ci
 npm run dev
 ```
 
-表示された `http://localhost:5173` を開き、「入城する」を選択します。
+表示された `http://localhost:5173` を開き、3分デモまたは10分通常を選んで「ゲストで入城する」を押します。メールアドレス、実名、外部ログインは不要です。
 
 操作:
 
@@ -61,7 +63,7 @@ npm run verify:local
 npm run test:soak:m6
 ```
 
-E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動し、システムのGoogle ChromeをHeadlessで操作します。独立した2 browser contextでの同期、鉄道予約、通信断からの自動復帰、reload後の同一player復帰、乗車・到着、AI Replayの候補拒否・採用・鉄道監査、5km移動、CITY CORE警告、patch適用、checksum一致、試合終了までを検証します。
+E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動し、システムのGoogle ChromeをHeadlessで操作します。Guest Mode、サーバー確定のデモ設定、独立した2 browser contextでの同期、鉄道予約、通信断からの自動復帰、reload後の同一player復帰、乗車・到着、AI Replayの候補拒否・採用・鉄道監査、5km移動、CITY CORE警告、patch適用、checksum一致、試合終了までを検証します。
 
 ## 構成
 

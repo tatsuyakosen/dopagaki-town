@@ -23,18 +23,29 @@
         <div class="eyebrow">PLAYER <i>vs</i> PLAYER <i>vs</i> CITY</div>
         <h1>街が、<br /><em>鬼になる。</em></h1>
         <p>
-          1人のプレイヤーと3体のRival Botが、変形し続ける街で追いかけ合う。
-          鬼だった時間が最も短い参加者が勝者だ。
+          1人のGuestと3体のRival Botが、変形する街で追いかけ合う。
+          鬼だった時間が最も短い参加者が勝者。登録なしですぐに街へ入れる。
         </p>
-        <label for="player-name">CALL SIGN</label>
+        <fieldset class="mode-picker">
+          <legend>MATCH MODE</legend>
+          <label class="mode-option">
+            <input type="radio" name="match-mode" value="DEMO" checked />
+            <span><b>3分デモ</b><small>FIXED SEED / 見せ場を短時間で確認</small></span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="match-mode" value="STANDARD" />
+            <span><b>10分通常</b><small>STANDARD / フルマッチ</small></span>
+          </label>
+        </fieldset>
+        <label for="player-name">CALL SIGN / 任意</label>
         <div class="entry-row">
-          <input id="player-name" maxlength="20" value="Runner" autocomplete="off" />
-          <button id="enter-button" type="button"><span>入城する</span><b>ENTER ↗</b></button>
+          <input id="player-name" maxlength="20" placeholder="Guest" autocomplete="off" />
+          <button id="enter-button" type="button"><span>ゲストで入城する</span><b>NO LOGIN / ENTER ↗</b></button>
         </div>
         <div class="entry-meta">
-          <span><b>01</b> 自動Bot補充</span>
-          <span><b>02</b> 外部ログイン不要</span>
-          <span><b>03</b> 10 MIN MATCH</span>
+          <span><b>01</b> 3 Rival Bots</span>
+          <span><b>02</b> メール・実名不要</span>
+          <span id="entry-mode-summary"><b>03</b> 3 MIN DEMO</span>
         </div>
         <p id="entry-error" class="error-message" role="alert"></p>
       </section>

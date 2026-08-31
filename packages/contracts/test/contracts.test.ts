@@ -27,11 +27,13 @@ describe("runtime contracts", () => {
     expect(ClientMessageSchema.parse({
       type: "JOIN",
       playerName: "Reconnect Player",
+      matchMode: "DEMO",
       playerToken,
       lastAckedEventId: 12,
       mapVersion: 3,
-    })).toMatchObject({ type: "JOIN", playerToken, lastAckedEventId: 12, mapVersion: 3 });
+    })).toMatchObject({ type: "JOIN", matchMode: "DEMO", playerToken, lastAckedEventId: 12, mapVersion: 3 });
     expect(() => ClientMessageSchema.parse({ type: "JOIN", playerToken: "short" })).toThrow();
+    expect(() => ClientMessageSchema.parse({ type: "JOIN", matchMode: "CUSTOM" })).toThrow();
     expect(ServerMessageSchema.parse({
       type: "WELCOME",
       playerId: "human-1",
@@ -92,6 +94,8 @@ describe("runtime contracts", () => {
     expect(ServerMessageSchema.parse({
       type: "ROOM_CONFIG",
       matchId: "match-20260827",
+      matchMode: "DEMO",
+      durationMs: 180_000,
       seed: graph.seed,
       transitGraph: parsed,
     })).toMatchObject({ type: "ROOM_CONFIG", matchId: "match-20260827" });

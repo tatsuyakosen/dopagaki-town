@@ -16,6 +16,7 @@ test("5km streaming completes a real ten-minute match without resource growth", 
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
   await page.goto("/");
+  await page.getByRole("radio", { name: /10分通常/ }).check();
   await page.getByLabel("CALL SIGN").fill("M6 Soak Runner");
   await page.getByRole("button", { name: /入城する/ }).click();
   await expect(page.locator("body")).toHaveAttribute("data-world-size", "5000");

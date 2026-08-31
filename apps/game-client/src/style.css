@@ -118,7 +118,7 @@ body[data-match-status="RUNNING"] #connection-dot {
   z-index: 5;
   left: clamp(24px, 7vw, 110px);
   top: 50%;
-  width: min(560px, calc(100vw - 48px));
+  width: min(620px, calc(100vw - 48px));
   transform: translateY(-47%);
   padding: clamp(28px, 4vw, 52px);
   border-left: 3px solid var(--mint);
@@ -144,7 +144,18 @@ body[data-match-status="RUNNING"] #connection-dot {
 
 .entry-panel h1 em { color: var(--mint); font-style: normal; }
 .entry-panel > p { max-width: 430px; color: #a9c0b8; font-size: 13px; line-height: 1.9; }
-.entry-panel label { display: block; margin: 27px 0 8px; color: #719087; font-size: 9px; letter-spacing: .2em; }
+.entry-panel > label { display: block; margin: 20px 0 8px; color: #719087; font-size: 9px; letter-spacing: .2em; }
+.mode-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin: 20px 0 0; padding: 0; border: 0; }
+.mode-picker legend { grid-column: 1 / -1; margin-bottom: 8px; color: #719087; font-size: 9px; letter-spacing: .2em; }
+.entry-panel .mode-option { position: relative; display: block; margin: 0; cursor: pointer; }
+.mode-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.mode-option span { display: block; min-height: 63px; padding: 12px 13px; border: 1px solid rgba(255,255,255,.13); background: rgba(255,255,255,.035); transition: border-color .15s, background .15s; }
+.mode-option b, .mode-option small { display: block; }
+.mode-option b { color: #d9e8e3; font-size: 12px; letter-spacing: .06em; }
+.mode-option small { margin-top: 6px; color: #718780; font-size: 8px; line-height: 1.35; letter-spacing: .06em; }
+.mode-option input:checked + span { border-color: var(--mint); background: rgba(89,245,189,.1); box-shadow: inset 3px 0 0 var(--mint); }
+.mode-option input:checked + span b { color: var(--mint); }
+.mode-option input:focus-visible + span { outline: 2px solid #fff; outline-offset: 2px; }
 .entry-row { display: flex; }
 
 .entry-row input {
@@ -174,6 +185,7 @@ body[data-match-status="RUNNING"] #connection-dot {
 .entry-row button:disabled { opacity: .6; transform: none; }
 .entry-row button span { display: block; font-size: 13px; }
 .entry-row button b { display: block; margin-top: 3px; font-size: 8px; letter-spacing: .14em; }
+.entry-row button span, .entry-row button b { white-space: nowrap; }
 
 .entry-meta {
   margin-top: 25px;
@@ -270,6 +282,7 @@ kbd { display: inline-grid; min-width: 20px; height: 20px; margin-right: 3px; pl
   .system-status { display: none; }
   .entry-panel { left: 16px; width: calc(100vw - 32px); padding: 28px 24px; }
   .entry-panel h1 { font-size: 48px; }
+  .mode-picker { grid-template-columns: 1fr; }
   .entry-meta { gap: 8px 14px; }
   .match-strip { top: 70px; width: calc(100% - 24px); }
   .match-strip > div { min-width: 0; flex: 1; padding: 9px 8px; }

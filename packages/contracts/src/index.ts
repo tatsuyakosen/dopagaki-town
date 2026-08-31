@@ -9,10 +9,13 @@ export const MovementSchema = Vec2Schema.extend({
   sprint: z.boolean().default(false),
 });
 
+export const MatchModeSchema = z.enum(["DEMO", "STANDARD"]);
+
 export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("JOIN"),
     playerName: z.string().trim().min(1).max(20).optional(),
+    matchMode: MatchModeSchema.optional(),
     playerToken: z.string().min(32).max(128).optional(),
     lastAckedEventId: z.number().int().nonnegative().optional(),
     mapVersion: z.number().int().positive().optional(),
@@ -351,6 +354,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("ROOM_CONFIG"),
     matchId: z.string(),
+    matchMode: MatchModeSchema,
+    durationMs: z.number().int().positive(),
     seed: z.number().int(),
     transitGraph: TransitGraphSchema,
   }),
@@ -371,6 +376,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
 
 export type Vec2 = z.infer<typeof Vec2Schema>;
 export type Movement = z.infer<typeof MovementSchema>;
+export type MatchMode = z.infer<typeof MatchModeSchema>;
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type Role = z.infer<typeof RoleSchema>;
 export type PlayerKind = z.infer<typeof PlayerKindSchema>;

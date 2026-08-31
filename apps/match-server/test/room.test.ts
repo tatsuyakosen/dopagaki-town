@@ -10,6 +10,8 @@ function roomFixture(): {
   const room = new MatchRoom({
     seed: 20260827,
     durationMs: 60_000,
+    demoSeed: 777,
+    demoDurationMs: 180_000,
     patchIntervalMs: 20_000,
     humanSpeedMultiplier: 1,
     now: () => now,
@@ -24,6 +26,35 @@ function roomFixture(): {
 }
 
 describe("authoritative reconnect room", () => {
+  it("lets the first guest select the fixed demo profile without allowing later joins to switch it", () => {
+    const { room } = roomFixture();
+    const first = room.join("connection-demo", {
+      type: "JOIN",
+      playerName: "Demo Guest",
+      matchMode: "DEMO",
+    });
+    expect(first.ok).toBe(true);
+    expect(room.matchMode).toBe("DEMO");
+    expect(room.game.seed).toBe(777);
+    expect(room.game.durationMs).toBe(180_000);
+
+    const demoMatchId = room.game.matchId;
+    const second = room.join("connection-standard", {
+      type: "JOIN",
+      playerName: "Standard Guest",
+      matchMode: "STANDARD",
+    });
+    expect(second.ok).toBe(true);
+    expect(room.matchMode).toBe("DEMO");
+    expect(room.game.seed).toBe(777);
+    expect(room.game.durationMs).toBe(180_000);
+
+    room.restart();
+    expect(room.matchMode).toBe("DEMO");
+    expect(room.game.seed).toBe(777);
+    expect(room.game.matchId).not.toBe(demoMatchId);
+  });
+
   it("resumes the same player within 30 seconds without consuming another Bot", () => {
     const { room, advance } = roomFixture();
     const joined = room.join("connection-1", { type: "JOIN", playerName: "Reconnect Player" });
@@ -150,6 +181,7 @@ describe("authoritative reconnect room", () => {
     fixture.room.tick(1_000);
     const before = fixture.room.snapshot();
     const checkpoint = fixture.room.checkpoint();
+    expect(checkpoint.matchMode).toBe("STANDARD");
 
     let restoredNow = checkpoint.capturedAtMs;
     const restored = MatchRoom.restore(checkpoint, {
@@ -163,6 +195,7 @@ describe("authoritative reconnect room", () => {
     expect(restored.snapshot().matchId).toBe(before.matchId);
     expect(restored.snapshot().nowMs).toBe(before.nowMs);
     expect(restored.snapshot().mapVersion).toBe(before.mapVersion);
+    expect(restored.matchMode).toBe("STANDARD");
     const resumed = restored.join("connection-restored", {
       type: "JOIN",
       playerToken: joined.welcome.playerToken,

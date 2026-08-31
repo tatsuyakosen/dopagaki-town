@@ -16,6 +16,7 @@ import {
   ServerMessageSchema,
   encodeMessage,
   type ClientMessage,
+  type MatchMode,
   type MatchSnapshot,
   type Obstacle,
   type PlayerSnapshot,
@@ -50,6 +51,9 @@ const resultPanel = required<HTMLElement>("#result-panel");
 const enterButton = required<HTMLButtonElement>("#enter-button");
 const restartButton = required<HTMLButtonElement>("#restart-button");
 const playerName = required<HTMLInputElement>("#player-name");
+const matchModeInputs = [...document.querySelectorAll<HTMLInputElement>('input[name="match-mode"]')];
+if (matchModeInputs.length !== 2) throw new Error("match mode inputs are required");
+const entryModeSummary = required<HTMLElement>("#entry-mode-summary");
 const entryError = required<HTMLElement>("#entry-error");
 const roleLabel = required<HTMLElement>("#role-label");
 const timeLabel = required<HTMLElement>("#time-label");
@@ -487,6 +491,7 @@ interface PersistedPlayerSession {
   lastAckedEventId: number;
   mapVersion: number;
   lastAcknowledgedPatchKey: string;
+  matchMode: MatchMode;
 }
 
 const SESSION_STORAGE_KEY = "dopagaki.player-session.v1";
@@ -506,7 +511,19 @@ function readPersistedSession(): PersistedPlayerSession | null {
       typeof parsed.mapVersion !== "number" ||
       typeof parsed.lastAcknowledgedPatchKey !== "string"
     ) return null;
-    return parsed as PersistedPlayerSession;
+    const matchMode = parsed.matchMode === "DEMO" || parsed.matchMode === "STANDARD"
+      ? parsed.matchMode
+      : "STANDARD";
+    return {
+      playerToken: parsed.playerToken,
+      playerName: parsed.playerName,
+      playerId: parsed.playerId,
+      matchId: parsed.matchId,
+      lastAckedEventId: parsed.lastAckedEventId,
+      mapVersion: parsed.mapVersion,
+      lastAcknowledgedPatchKey: parsed.lastAcknowledgedPatchKey,
+      matchMode,
+    };
   } catch {
     return null;
   }
@@ -523,7 +540,8 @@ let lastTransitHudUpdateAt = Number.NEGATIVE_INFINITY;
 let lastTransitHudKey = "";
 let lastAiReplayKey = "";
 let lastAcknowledgedPatchKey = persistedSession?.lastAcknowledgedPatchKey ?? "";
-let enteredName = persistedSession?.playerName ?? "Runner";
+let enteredName = persistedSession?.playerName ?? "Guest";
+let selectedMatchMode: MatchMode = persistedSession?.matchMode ?? "DEMO";
 let connectionTimeoutId: number | null = null;
 let reconnectTimeoutId: number | null = null;
 let reconnectAttempt = 0;
@@ -543,6 +561,7 @@ function persistPlayerSession(): void {
     lastAckedEventId: Math.max(0, lastEventId),
     mapVersion: lastKnownMapVersion,
     lastAcknowledgedPatchKey,
+    matchMode: selectedMatchMode,
   };
   const payload = JSON.stringify(value);
   if (payload === lastPersistedSessionPayload) return;
@@ -621,6 +640,7 @@ function connect(): void {
     sendMessage({
       type: "JOIN",
       playerName: enteredName,
+      matchMode: selectedMatchMode,
       ...(playerToken === null ? {} : {
         playerToken,
         lastAckedEventId: Math.max(0, lastEventId),
@@ -662,6 +682,12 @@ function connect(): void {
     } else if (parsed.data.type === "ROOM_CONFIG") {
       roomTransitGraph = parsed.data.transitGraph;
       roomConfigMatchId = parsed.data.matchId;
+      selectedMatchMode = parsed.data.matchMode;
+      for (const input of matchModeInputs) input.checked = input.value === selectedMatchMode;
+      entryModeSummary.innerHTML = `<b>03</b> ${selectedMatchMode === "DEMO" ? "3 MIN DEMO" : "10 MIN STANDARD"}`;
+      document.body.dataset.matchMode = parsed.data.matchMode;
+      document.body.dataset.matchDurationMs = String(parsed.data.durationMs);
+      persistPlayerSession();
     } else if (parsed.data.type === "SNAPSHOT") {
       if (roomTransitGraph === null || roomConfigMatchId !== parsed.data.snapshot.matchId) return;
       const snapshot: MatchSnapshot = {
@@ -1080,9 +1106,16 @@ function syncSnapshot(snapshot: MatchSnapshot): void {
 }
 
 enterButton.addEventListener("click", () => {
-  enteredName = playerName.value.trim() || "Runner";
+  enteredName = playerName.value.trim() || "Guest";
   connect();
 });
+for (const input of matchModeInputs) {
+  input.addEventListener("change", () => {
+    if (!input.checked || (input.value !== "DEMO" && input.value !== "STANDARD")) return;
+    selectedMatchMode = input.value;
+    entryModeSummary.innerHTML = `<b>03</b> ${selectedMatchMode === "DEMO" ? "3 MIN DEMO" : "10 MIN STANDARD"}`;
+  });
+}
 playerName.addEventListener("keydown", (event) => {
   if (event.key === "Enter") enterButton.click();
 });
@@ -1228,7 +1261,8 @@ syncStreamedWorld(
 
 document.body.dataset.reconnectCount = "0";
 document.body.dataset.connectionState = "OFFLINE";
-playerName.value = enteredName;
+playerName.value = persistedSession === null ? "" : enteredName;
+for (const input of matchModeInputs) input.checked = input.value === selectedMatchMode;
 if (playerToken !== null) connect();
 
 engine.runRenderLoop(() => scene.render());

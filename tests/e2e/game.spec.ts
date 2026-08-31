@@ -30,12 +30,18 @@ test("players can reserve rail, reconnect, arrive, move, verify CITY CORE, and f
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /街が/ })).toBeVisible();
-  await page.getByLabel("CALL SIGN").fill("E2E Runner");
+  await page.screenshot({ path: "test-results/guest-entry.png", fullPage: true });
+  await page.getByRole("radio", { name: /3分デモ/ }).check();
+  await expect(page.getByLabel("CALL SIGN")).toHaveValue("");
   await page.getByRole("button", { name: /入城する/ }).click();
 
   await expect(page.locator("#hud")).toBeVisible();
   await expect(page.locator("#score-list li")).toHaveCount(4);
+  await expect(page.locator("#score-list")).toContainText("Guest");
   await expect(page.locator("body")).toHaveAttribute("data-match-status", "RUNNING");
+  await expect(page.locator("body")).toHaveAttribute("data-match-mode", "DEMO");
+  await expect(page.locator("body")).toHaveAttribute("data-match-duration-ms", "75000");
+  await expect(page.locator("#seed-label")).toHaveText("20260827");
   await expect(page.locator("body")).toHaveAttribute("data-world-size", "5000");
   await expect(page.locator("body")).toHaveAttribute("data-world-chunks", "400");
   await expect(page.locator("body")).toHaveAttribute("data-active-chunks", "9");
@@ -59,12 +65,14 @@ test("players can reserve rail, reconnect, arrive, move, verify CITY CORE, and f
   const secondPage = await secondContext.newPage();
   secondPage.on("pageerror", (error) => pageErrors.push(error.message));
   await secondPage.goto("/");
+  await secondPage.getByRole("radio", { name: /10分通常/ }).check();
   await secondPage.getByLabel("CALL SIGN").fill("Second Runner");
   await secondPage.getByRole("button", { name: /入城する/ }).click();
   await expect(secondPage.locator("#hud")).toBeVisible();
+  await expect(secondPage.locator("body")).toHaveAttribute("data-match-mode", "DEMO");
   await expect(page.locator("#score-list")).toContainText("Second Runner");
   await expect(page.locator("body")).toHaveAttribute("data-human-players", "2");
-  await expect(secondPage.locator("#score-list")).toContainText("E2E Runner");
+  await expect(secondPage.locator("#score-list")).toContainText("Guest");
   await secondContext.close();
 
   await page.evaluate(() => window.dispatchEvent(new Event("dopagaki:test-disconnect")));

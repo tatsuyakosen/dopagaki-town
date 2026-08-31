@@ -1,5 +1,11 @@
 import { randomBytes } from "node:crypto";
-import type { ClientMessage, MatchSnapshot, Movement, NetworkMatchSnapshot } from "@dopagaki/contracts";
+import type {
+  ClientMessage,
+  MatchMode,
+  MatchSnapshot,
+  Movement,
+  NetworkMatchSnapshot,
+} from "@dopagaki/contracts";
 import {
   acknowledgeMapChecksum,
   cancelTransit as cancelGameTransit,
@@ -30,6 +36,9 @@ const IDLE_INPUT: Movement = { x: 0, z: 0, sprint: false };
 export interface MatchRoomConfig {
   seed: number;
   durationMs: number;
+  demoSeed?: number;
+  demoDurationMs?: number;
+  defaultMode?: MatchMode;
   patchIntervalMs: number;
   humanSpeedMultiplier: number;
   now?: () => number;
@@ -73,7 +82,9 @@ interface SessionCheckpoint extends Omit<PlayerSession, "connectionId"> {
 export interface RoomCheckpoint {
   version: number;
   capturedAtMs: number;
+  matchMode?: MatchMode;
   seed: number;
+  matchInstanceSequence?: number;
   playerSequence: number;
   game: GameCheckpoint;
   sessions: SessionCheckpoint[];
@@ -85,26 +96,51 @@ export class MatchRoom {
   private readonly config: MatchRoomConfig;
   private readonly now: () => number;
   private readonly tokenFactory: () => string;
+  private mode: MatchMode;
   private seed: number;
+  private matchInstanceSequence = 0;
   private playerSequence = 0;
   private readonly sessions = new Map<string, PlayerSession>();
   private readonly connectionTokens = new Map<string, string>();
 
   constructor(config: MatchRoomConfig) {
     this.config = config;
-    this.seed = config.seed;
+    this.mode = config.defaultMode ?? "STANDARD";
+    this.seed = this.profileFor(this.mode).seed;
     this.now = config.now ?? Date.now;
     this.tokenFactory = config.tokenFactory ?? (() => randomBytes(24).toString("hex"));
     this.game = this.createGame(this.seed);
   }
 
   private createGame(seed: number): GameState {
-    return createGame({
+    const game = createGame({
       seed,
-      durationMs: this.config.durationMs,
+      durationMs: this.profileFor(this.mode).durationMs,
       patchIntervalMs: this.config.patchIntervalMs,
       humanSpeedMultiplier: this.config.humanSpeedMultiplier,
     });
+    if (this.matchInstanceSequence > 0) {
+      game.matchId = `${game.matchId}-r${this.matchInstanceSequence}`;
+    }
+    return game;
+  }
+
+  private profileFor(mode: MatchMode): { seed: number; durationMs: number } {
+    if (mode === "DEMO") {
+      return {
+        seed: this.config.demoSeed ?? this.config.seed,
+        durationMs: this.config.demoDurationMs ?? 180_000,
+      };
+    }
+    return { seed: this.config.seed, durationMs: this.config.durationMs };
+  }
+
+  private activateMode(mode: MatchMode): void {
+    if (this.playerSequence > 0) this.matchInstanceSequence += 1;
+    const profile = this.profileFor(mode);
+    this.mode = mode;
+    this.seed = profile.seed;
+    this.game = this.createGame(this.seed);
   }
 
   private uniqueToken(): string {
@@ -131,7 +167,11 @@ export class MatchRoom {
     if (request.playerToken !== undefined) {
       return this.resume(connectionId, request);
     }
-    if (this.game.status === "FINISHED") this.restart();
+    if (this.sessions.size === 0 && request.matchMode !== undefined) {
+      this.activateMode(request.matchMode);
+    } else if (this.game.status === "FINISHED") {
+      this.restart();
+    }
 
     this.playerSequence += 1;
     const playerId = `human-${this.playerSequence}`;
@@ -297,7 +337,8 @@ export class MatchRoom {
   }
 
   restart(): void {
-    this.seed += 1;
+    this.matchInstanceSequence += 1;
+    this.seed = this.mode === "DEMO" ? this.profileFor("DEMO").seed : this.seed + 1;
     this.game = this.createGame(this.seed);
     for (const session of this.sessions.values()) {
       replaceBotWithHuman(this.game, session.playerId, session.displayName);
@@ -321,11 +362,17 @@ export class MatchRoom {
     return this.sessions.size;
   }
 
+  get matchMode(): MatchMode {
+    return this.mode;
+  }
+
   checkpoint(): RoomCheckpoint {
     return {
-      version: 2,
+      version: 3,
       capturedAtMs: this.now(),
+      matchMode: this.mode,
       seed: this.seed,
+      matchInstanceSequence: this.matchInstanceSequence,
       playerSequence: this.playerSequence,
       game: gameCheckpointOf(this.game),
       sessions: [...this.sessions.values()].map((session) => ({
@@ -349,9 +396,13 @@ export class MatchRoom {
     checkpoint: RoomCheckpoint,
     config: MatchRoomConfig,
   ): MatchRoom {
-    if (checkpoint.version !== 2) throw new Error(`Unsupported Room checkpoint v${checkpoint.version}`);
+    if (checkpoint.version !== 2 && checkpoint.version !== 3) {
+      throw new Error(`Unsupported Room checkpoint v${checkpoint.version}`);
+    }
     const room = new MatchRoom(config);
+    room.mode = checkpoint.matchMode ?? "STANDARD";
     room.seed = checkpoint.seed;
+    room.matchInstanceSequence = checkpoint.matchInstanceSequence ?? 0;
     room.playerSequence = checkpoint.playerSequence;
     room.game = restoreGame(checkpoint.game);
     const now = room.now();
