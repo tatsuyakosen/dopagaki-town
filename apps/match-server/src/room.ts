@@ -25,6 +25,11 @@ import {
   type GameState,
   type TransitActionResult,
 } from "@dopagaki/game-core";
+import {
+  DirectorCoordinator,
+  type DirectorAdapter,
+  type DirectorCoordinatorStatus,
+} from "./director-coordinator.js";
 
 type JoinMessage = Extract<ClientMessage, { type: "JOIN" }>;
 
@@ -43,6 +48,8 @@ export interface MatchRoomConfig {
   humanSpeedMultiplier: number;
   now?: () => number;
   tokenFactory?: () => string;
+  directorAdapter?: DirectorAdapter;
+  directorTimeoutMs?: number;
 }
 
 interface PlayerSession {
@@ -102,6 +109,7 @@ export class MatchRoom {
   private playerSequence = 0;
   private readonly sessions = new Map<string, PlayerSession>();
   private readonly connectionTokens = new Map<string, string>();
+  private readonly directorCoordinator: DirectorCoordinator | null;
 
   constructor(config: MatchRoomConfig) {
     this.config = config;
@@ -110,6 +118,14 @@ export class MatchRoom {
     this.now = config.now ?? Date.now;
     this.tokenFactory = config.tokenFactory ?? (() => randomBytes(24).toString("hex"));
     this.game = this.createGame(this.seed);
+    const directorAdapter = config.directorAdapter;
+    this.directorCoordinator = directorAdapter === undefined
+      ? null
+      : new DirectorCoordinator({
+          currentGame: () => this.game,
+          adapter: directorAdapter,
+          ...(config.directorTimeoutMs === undefined ? {} : { timeoutMs: config.directorTimeoutMs }),
+        });
   }
 
   private createGame(seed: number): GameState {
@@ -325,7 +341,10 @@ export class MatchRoom {
     for (const session of this.sessions.values()) {
       if (session.connectionId !== null) inputs[session.playerId] = session.input;
     }
-    stepGame(this.game, inputs, deltaMs);
+    stepGame(this.game, inputs, deltaMs, {
+      autoPrepareDirector: this.directorCoordinator === null,
+    });
+    this.directorCoordinator?.poll();
   }
 
   snapshot(): MatchSnapshot {
@@ -337,6 +356,7 @@ export class MatchRoom {
   }
 
   restart(): void {
+    this.directorCoordinator?.reset();
     this.matchInstanceSequence += 1;
     this.seed = this.mode === "DEMO" ? this.profileFor("DEMO").seed : this.seed + 1;
     this.game = this.createGame(this.seed);
@@ -364,6 +384,10 @@ export class MatchRoom {
 
   get matchMode(): MatchMode {
     return this.mode;
+  }
+
+  directorStatus(): DirectorCoordinatorStatus | null {
+    return this.directorCoordinator?.status() ?? null;
   }
 
   checkpoint(): RoomCheckpoint {

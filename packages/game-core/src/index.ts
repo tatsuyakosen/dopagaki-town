@@ -1,7 +1,9 @@
 import {
+  DirectorObservationSchema,
   MatchSnapshotSchema,
   type AIReplayEntry,
   type BotStrategy,
+  type DirectorObservation,
   type MapPatch,
   type MatchSnapshot,
   type Movement,
@@ -20,6 +22,7 @@ import {
   createFixtureStageSpec,
   evaluatePatch,
   selectPatchCandidate,
+  type DirectorPlan,
   type VerifierContext,
 } from "@dopagaki/verifier";
 import {
@@ -51,6 +54,7 @@ export const DEFAULT_PATCH_INTERVAL_MS = 20_000;
 export const INITIAL_BALANCE_YEN = 1_000;
 export const STATION_INTERACTION_RADIUS = 180;
 export const ARRIVAL_PROTECTION_MS = 3_000;
+export const DIRECTOR_REQUEST_LEAD_MS = 15_000;
 
 const HUMAN_SPEED = 10.5;
 const BOT_SPEED = 9.4;
@@ -122,6 +126,17 @@ export interface TransitActionResult {
   accepted: boolean;
   code: TransitActionCode;
   message: string;
+}
+
+export interface StepGameOptions {
+  autoPrepareDirector?: boolean;
+}
+
+export type DirectorApplyCode = "PREPARED" | "ALL_REJECTED" | "NOT_DUE" | "STALE";
+
+export interface DirectorApplyResult {
+  accepted: boolean;
+  code: DirectorApplyCode;
 }
 
 type Inputs = Readonly<Record<string, Movement | undefined>>;
@@ -583,6 +598,58 @@ function verifierContext(state: GameState): VerifierContext {
   };
 }
 
+export function directorVerifierContextOf(state: GameState): VerifierContext {
+  return {
+    world: structuredClone(state.world),
+    metadata: structuredClone(state.worldMetadata),
+    players: structuredClone(state.players),
+    obstacles: structuredClone(state.obstacles),
+    navigationEdges: structuredClone(state.navigationEdges),
+    currentMapVersion: state.mapVersion,
+    appliedPatchIds: new Set(state.appliedPatchIds),
+    lastTargetPlayerId: state.lastTargetPlayerId,
+  };
+}
+
+export function directorRequestIdOf(state: GameState): string {
+  return `${state.matchId}:${state.interventionSequence}:${state.mapVersion}`;
+}
+
+export function directorObservationOf(state: GameState): DirectorObservation {
+  return DirectorObservationSchema.parse({
+    requestId: directorRequestIdOf(state),
+    matchId: state.matchId,
+    seed: state.seed,
+    sequence: state.interventionSequence,
+    observedAtMs: state.nowMs,
+    mapVersion: state.mapVersion,
+    mapChecksum: state.mapChecksum,
+    stageSpec: structuredClone(state.stageSpec),
+    world: structuredClone(state.world),
+    players: state.players.map((player) => ({
+      id: player.id,
+      kind: player.kind,
+      strategy: player.strategy,
+      role: player.role,
+      position: { ...player.position },
+      velocity: { ...player.velocity },
+      oniDurationMs: player.oniDurationMs,
+      protectedUntilMs: player.protectedUntilMs,
+      transitPhase: player.transit.phase,
+    })),
+    stations: state.worldMetadata.stations.map((station) => ({
+      id: station.id,
+      chunkId: station.chunkId,
+      position: { ...station.position },
+    })),
+    mutationAnchors: structuredClone(state.worldMetadata.mutationAnchors),
+    obstacles: structuredClone(state.obstacles),
+    navigationEdges: structuredClone(state.navigationEdges),
+    appliedPatchIds: [...state.appliedPatchIds].sort(),
+    lastTargetPlayerId: state.lastTargetPlayerId,
+  });
+}
+
 export function evaluatePatchForGame(state: GameState, patch: MapPatch): PatchEvaluation {
   return evaluatePatch(patch, verifierContext(state));
 }
@@ -877,16 +944,21 @@ function applyPatchOperations(state: GameState, patch: MapPatch): void {
   }
 }
 
-function prepareNextIntervention(state: GameState): void {
-  const candidates = createFixturePatchCandidates(state.interventionSequence, verifierContext(state));
-  const decision = selectPatchCandidate(candidates, verifierContext(state));
+function prepareDirectorPlan(
+  state: GameState,
+  plan: DirectorPlan,
+  scheduleWarningFromNow: boolean,
+): DirectorApplyResult {
+  const decision = selectPatchCandidate(plan.candidates, verifierContext(state));
   const selected = decision.selected;
   const totalLatency = decision.evaluations.reduce((total, evaluation) => total + evaluation.latencyMs, 0);
   appendReplay(state, {
     phase: "CANDIDATES_EVALUATED",
     patchId: selected?.patchId ?? null,
     selectedPatchId: selected?.patchId ?? null,
-    summary: selected === null ? "全候補をHard Constraintで拒否" : `${selected.reason}を採用`,
+    summary: selected === null
+      ? `${plan.source} Directorの全候補をHard Constraintで拒否`
+      : `${plan.source} Director: ${selected.reason}を採用`,
     candidates: decision.evaluations,
     latencyMs: totalLatency,
     estimatedCostYen: decision.evaluations.reduce((total, evaluation) => total + evaluation.estimatedCostYen, 0),
@@ -896,9 +968,15 @@ function prepareNextIntervention(state: GameState): void {
     state.interventionSequence += 1;
     state.lastEventId += 1;
     state.lastEventText = "CITY CORE候補を全件拒否。地形を維持";
-    return;
+    return { accepted: false, code: "ALL_REJECTED" };
   }
 
+  if (scheduleWarningFromNow) {
+    state.cityCore.patchAppliesAtMs = Math.max(
+      state.cityCore.patchAppliesAtMs,
+      state.nowMs + selected.warningSec * 1_000,
+    );
+  }
   state.pendingPatches = selected.operations.map((operation) => prepareChunkPatch(state.world, {
     patchId: selected.patchId,
     baseMapVersion: selected.baseMapVersion,
@@ -915,6 +993,35 @@ function prepareNextIntervention(state: GameState): void {
   ].sort();
   state.lastEventId += 1;
   state.lastEventText = `CITY CORE予告: ${selected.reason} / ${selected.operations[0]?.type ?? "patch"}`;
+  return { accepted: true, code: "PREPARED" };
+}
+
+export function directorInterventionDue(state: GameState): boolean {
+  return state.status === "RUNNING"
+    && state.cityCore.patchPhase === "IDLE"
+    && state.cityCore.warningStartedAtMs === null
+    && state.nowMs >= state.cityCore.patchAppliesAtMs - DIRECTOR_REQUEST_LEAD_MS;
+}
+
+export function applyDirectorPlan(state: GameState, plan: DirectorPlan): DirectorApplyResult {
+  if (!directorInterventionDue(state)) return { accepted: false, code: "NOT_DUE" };
+  if (
+    plan.requestId !== directorRequestIdOf(state)
+    || plan.stageSpec.seed !== state.seed
+    || plan.candidates.some((candidate) => candidate.baseMapVersion !== state.mapVersion)
+  ) {
+    return { accepted: false, code: "STALE" };
+  }
+  return prepareDirectorPlan(state, plan, true);
+}
+
+function prepareNextIntervention(state: GameState): void {
+  prepareDirectorPlan(state, {
+    requestId: directorRequestIdOf(state),
+    source: "FIXTURE",
+    stageSpec: state.stageSpec,
+    candidates: createFixturePatchCandidates(state.interventionSequence, verifierContext(state)),
+  }, false);
 }
 
 function commitPreparedIntervention(state: GameState): void {
@@ -962,9 +1069,10 @@ function commitPreparedIntervention(state: GameState): void {
   state.pendingPatches = [];
 }
 
-function updateCityCore(state: GameState, deltaMs: number): void {
+function updateCityCore(state: GameState, deltaMs: number, autoPrepareDirector: boolean): void {
   const warningDuration = 6_000;
   if (
+    autoPrepareDirector &&
     state.cityCore.warningStartedAtMs === null &&
     state.nowMs >= state.cityCore.patchAppliesAtMs - warningDuration
   ) {
@@ -1075,7 +1183,12 @@ function finishGame(state: GameState): void {
   for (const player of state.players) player.velocity = { x: 0, z: 0 };
 }
 
-export function stepGame(state: GameState, inputs: Inputs, deltaMs: number): void {
+export function stepGame(
+  state: GameState,
+  inputs: Inputs,
+  deltaMs: number,
+  options: StepGameOptions = {},
+): void {
   if (state.status !== "RUNNING" || deltaMs <= 0) return;
   const safeDeltaMs = Math.min(deltaMs, 100);
   const endsAtMs = state.endsAtMs;
@@ -1095,7 +1208,7 @@ export function stepGame(state: GameState, inputs: Inputs, deltaMs: number): voi
   updateTransitState(state);
   for (const player of state.players) tryReserveRailBot(state, player);
 
-  updateCityCore(state, appliedDeltaMs);
+  updateCityCore(state, appliedDeltaMs, options.autoPrepareDirector ?? true);
   applyTag(state);
   state.remainingMs = Math.max(0, endsAtMs - state.nowMs);
   if (state.nowMs >= endsAtMs) finishGame(state);

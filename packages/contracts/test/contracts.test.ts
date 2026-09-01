@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ClientMessageSchema,
+  DirectorResponseSchema,
   MapPatchSchema,
   MatchSnapshotSchema,
   ServerMessageSchema,
@@ -140,6 +141,60 @@ describe("runtime contracts", () => {
         ...bridgeOperation,
         obstacle: { ...bridgeOperation.obstacle, kind: "BUILDING" },
       }],
+    })).toThrow();
+  });
+
+  it("limits a Director response to a StageSpec and one to three MapPatch candidates", () => {
+    const stageSpec = {
+      seed: 20260827,
+      theme: "rail-vs-rooftop",
+      stations: ["osaka", "fukushima", "temma", "kyobashi"],
+      spawnZones: ["chunk-1", "chunk-2", "chunk-3", "chunk-4"],
+      initialOni: "bot-1",
+      routes: ["street", "alley"],
+      mutationAnchors: ["anchor-1", "anchor-2", "anchor-3"],
+      cityCoreSpawn: "chunk-10-10",
+    } as const;
+    const patch = MapPatchSchema.parse({
+      patchId: "director-patch",
+      baseMapVersion: 1,
+      reason: "open_escape_route",
+      targetZone: "chunk-10-10",
+      target: { x: 125, z: 75 },
+      targetPlayerId: null,
+      warningSec: 6,
+      operations: [{
+        type: "open_alley",
+        anchorId: "anchor-1",
+        gateId: "gate-1",
+        obstacle: {
+          id: "gate-1",
+          kind: "ALLEY_GATE",
+          x: 125,
+          z: 75,
+          width: 10,
+          depth: 3,
+          height: 4,
+          active: false,
+        },
+        edge: {
+          id: "edge-1",
+          fromNodeId: "10:10",
+          toNodeId: "11:11",
+          kind: "ALLEY",
+          active: true,
+        },
+      }],
+      expectedEffect: { encounterRatePct: 12, routeDiversityPct: 14 },
+    });
+
+    const requestId = "local-20260827:0:1";
+    expect(DirectorResponseSchema.parse({ requestId, stageSpec, candidates: [patch] }).candidates).toHaveLength(1);
+    expect(() => DirectorResponseSchema.parse({ requestId, stageSpec, candidates: [] })).toThrow();
+    expect(() => DirectorResponseSchema.parse({
+      requestId,
+      stageSpec,
+      candidates: [patch, patch, patch, patch],
     })).toThrow();
   });
 });

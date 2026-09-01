@@ -146,7 +146,7 @@ describe("F-01 through F-08 map patch verifier", () => {
 
   it("[T-09] falls back to the deterministic fixture after Director timeout or malformed JSON", async () => {
     const testContext = context();
-    const options = { seed: 20260827, sequence: 0, context: testContext };
+    const options = { requestId: "local-20260827:0:1", seed: 20260827, sequence: 0, context: testContext };
     const expected = await resolveDirectorPlan(options);
     const timedOut = await resolveDirectorPlan({
       ...options,
@@ -157,20 +157,30 @@ describe("F-01 through F-08 map patch verifier", () => {
       ...options,
       loadExternal: () => Promise.resolve("{not-json"),
     });
+    const wrongRequest = await resolveDirectorPlan({
+      ...options,
+      loadExternal: () => Promise.resolve({
+        requestId: "another-match:0:1",
+        stageSpec: expected.stageSpec,
+        candidates: expected.candidates,
+      }),
+    });
 
     expect(timedOut).toEqual(expected);
     expect(malformed).toEqual(expected);
+    expect(wrongRequest).toEqual(expected);
     expect(timedOut.source).toBe("FIXTURE");
     expect(selectPatchCandidate(timedOut.candidates, testContext).selected?.patchId).toBe("patch-1-valid");
   });
 
   it("accepts a schema-valid Director response but still leaves patch selection to the verifier", async () => {
     const testContext = context();
-    const options = { seed: 20260827, sequence: 0, context: testContext };
+    const options = { requestId: "local-20260827:0:1", seed: 20260827, sequence: 0, context: testContext };
     const fixture = await resolveDirectorPlan(options);
     const external = await resolveDirectorPlan({
       ...options,
       loadExternal: () => Promise.resolve(JSON.stringify({
+        requestId: options.requestId,
         stageSpec: fixture.stageSpec,
         candidates: fixture.candidates,
       })),

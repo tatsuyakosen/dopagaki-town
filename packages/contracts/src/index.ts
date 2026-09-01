@@ -245,6 +245,54 @@ export const MapPatchSchema = z.object({
   }),
 });
 
+export const DirectorPlayerObservationSchema = z.object({
+  id: z.string().min(1),
+  kind: PlayerKindSchema,
+  strategy: BotStrategySchema.nullable(),
+  role: RoleSchema,
+  position: Vec2Schema,
+  velocity: Vec2Schema,
+  oniDurationMs: z.number().nonnegative(),
+  protectedUntilMs: z.number().nonnegative(),
+  transitPhase: TransitPhaseSchema,
+});
+
+export const DirectorStationObservationSchema = TransitStationSchema.omit({ name: true });
+
+export const DirectorMutationAnchorSchema = z.object({
+  id: z.string().min(1),
+  chunkIds: z.array(z.string().min(1)).min(1),
+  position: Vec2Schema,
+  width: z.number().positive(),
+  depth: z.number().positive(),
+  height: z.number().positive(),
+});
+
+export const DirectorObservationSchema = z.object({
+  requestId: z.string().min(1),
+  matchId: z.string().min(1),
+  seed: z.number().int(),
+  sequence: z.number().int().nonnegative(),
+  observedAtMs: z.number().nonnegative(),
+  mapVersion: z.number().int().positive(),
+  mapChecksum: z.string().regex(/^[0-9a-f]{8}$/),
+  stageSpec: StageSpecSchema,
+  world: WorldSpecSchema,
+  players: z.array(DirectorPlayerObservationSchema).length(4),
+  stations: z.array(DirectorStationObservationSchema).min(4).max(6),
+  mutationAnchors: z.array(DirectorMutationAnchorSchema).min(3),
+  obstacles: z.array(ObstacleSchema),
+  navigationEdges: z.array(NavigationEdgeSchema),
+  appliedPatchIds: z.array(z.string().min(1)),
+  lastTargetPlayerId: z.string().nullable(),
+});
+
+export const DirectorResponseSchema = z.object({
+  requestId: z.string().min(1),
+  stageSpec: StageSpecSchema,
+  candidates: z.array(MapPatchSchema).min(1).max(3),
+});
+
 export const ConstraintIdSchema = z.enum([
   "F-01",
   "F-02",
@@ -395,6 +443,11 @@ export type NavigationEdge = z.infer<typeof NavigationEdgeSchema>;
 export type MapPatchOperation = z.infer<typeof MapPatchOperationSchema>;
 export type StageSpec = z.infer<typeof StageSpecSchema>;
 export type MapPatch = z.infer<typeof MapPatchSchema>;
+export type DirectorPlayerObservation = z.infer<typeof DirectorPlayerObservationSchema>;
+export type DirectorStationObservation = z.infer<typeof DirectorStationObservationSchema>;
+export type DirectorMutationAnchor = z.infer<typeof DirectorMutationAnchorSchema>;
+export type DirectorObservation = z.infer<typeof DirectorObservationSchema>;
+export type DirectorResponse = z.infer<typeof DirectorResponseSchema>;
 export type ConstraintId = z.infer<typeof ConstraintIdSchema>;
 export type ConstraintViolation = z.infer<typeof ConstraintViolationSchema>;
 export type PatchEvaluation = z.infer<typeof PatchEvaluationSchema>;

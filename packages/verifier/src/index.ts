@@ -1,6 +1,5 @@
 import {
-  MapPatchSchema,
-  StageSpecSchema,
+  DirectorResponseSchema,
   type ConstraintViolation,
   type MapPatch,
   type MapPatchOperation,
@@ -46,12 +45,14 @@ export interface PatchSelection {
 }
 
 export interface DirectorPlan {
+  requestId: string;
   source: "FIXTURE" | "EXTERNAL";
   stageSpec: StageSpec;
   candidates: MapPatch[];
 }
 
 export interface DirectorResolverOptions {
+  requestId: string;
   seed: number;
   sequence: number;
   context: VerifierContext;
@@ -365,6 +366,7 @@ export function createFixturePatchCandidates(
 
 function fixtureDirectorPlan(options: DirectorResolverOptions): DirectorPlan {
   return {
+    requestId: options.requestId,
     source: "FIXTURE",
     stageSpec: createFixtureStageSpec(
       options.seed,
@@ -378,18 +380,13 @@ function fixtureDirectorPlan(options: DirectorResolverOptions): DirectorPlan {
 
 function parseExternalDirectorPlan(raw: unknown, options: DirectorResolverOptions): DirectorPlan {
   const decoded: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
-  if (typeof decoded !== "object" || decoded === null) throw new Error("Director response must be an object");
-  const record = decoded as Record<string, unknown>;
-  const stageSpec = StageSpecSchema.parse(record.stageSpec);
+  const { requestId, stageSpec, candidates } = DirectorResponseSchema.parse(decoded);
+  if (requestId !== options.requestId) throw new Error("Director response requestId is stale");
   if (stageSpec.seed !== options.seed) throw new Error("Director response seed does not match the Room seed");
-  if (!Array.isArray(record.candidates) || record.candidates.length < 1 || record.candidates.length > 3) {
-    throw new Error("Director response must contain one to three candidates");
-  }
-  const candidates = record.candidates.map((candidate) => MapPatchSchema.parse(candidate));
   if (candidates.some((candidate) => candidate.baseMapVersion !== options.context.currentMapVersion)) {
     throw new Error("Director response baseMapVersion is stale");
   }
-  return { source: "EXTERNAL", stageSpec, candidates };
+  return { requestId, source: "EXTERNAL", stageSpec, candidates };
 }
 
 export async function resolveDirectorPlan(options: DirectorResolverOptions): Promise<DirectorPlan> {

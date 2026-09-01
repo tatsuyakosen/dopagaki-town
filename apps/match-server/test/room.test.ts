@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { MatchRoom, ONI_TAKEOVER_MS, RECONNECT_WINDOW_MS } from "../src/room.js";
+import { directorVerifierContextOf } from "@dopagaki/game-core";
+import { createFixturePatchCandidates } from "@dopagaki/verifier";
+import { describe, expect, it, vi } from "vitest";
+import {
+  MatchRoom,
+  ONI_TAKEOVER_MS,
+  RECONNECT_WINDOW_MS,
+  type MatchRoomConfig,
+} from "../src/room.js";
 
-function roomFixture(): {
+function roomFixture(overrides: Partial<MatchRoomConfig> = {}): {
   room: MatchRoom;
   advance: (milliseconds: number) => void;
 } {
@@ -16,6 +23,7 @@ function roomFixture(): {
     humanSpeedMultiplier: 1,
     now: () => now,
     tokenFactory: () => `${String(++tokenSequence).padStart(48, "0")}`,
+    ...overrides,
   });
   return {
     room,
@@ -26,6 +34,146 @@ function roomFixture(): {
 }
 
 describe("authoritative reconnect room", () => {
+  it("coordinates a schema-valid mock Director response through the authoritative verifier", async () => {
+    const observations: Array<Parameters<NonNullable<MatchRoomConfig["directorAdapter"]>>[0]> = [];
+    const roomRef: { current: MatchRoom | null } = { current: null };
+    const fixture = roomFixture({
+      directorAdapter: (observation) => {
+        observations.push(observation);
+        observation.players[0]!.position.x = 999_999;
+        const currentRoom = roomRef.current;
+        if (currentRoom === null) throw new Error("Room is not ready");
+        return Promise.resolve({
+          requestId: observation.requestId,
+          stageSpec: currentRoom.game.stageSpec,
+          candidates: createFixturePatchCandidates(
+            observation.sequence,
+            directorVerifierContextOf(currentRoom.game),
+          ),
+        });
+      },
+    });
+    const room = fixture.room;
+    roomRef.current = room;
+    expect(room.join("connection-director", { type: "JOIN", playerName: "Director Player" }).ok).toBe(true);
+
+    while (room.game.nowMs < 5_000) room.tick(100);
+    await vi.waitFor(() => expect(room.game.cityCore.patchPhase).toBe("PREPARED"));
+
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      requestId: `${room.game.matchId}:0:1`,
+      matchId: room.game.matchId,
+      seed: room.game.seed,
+      sequence: 0,
+      mapVersion: 1,
+    });
+    expect("displayName" in (observations[0]?.players[0] ?? {})).toBe(false);
+    expect(room.game.players[0]?.position.x).not.toBe(999_999);
+    expect(room.game.cityCore.activePatch?.patchId).toBe("patch-1-valid");
+    const replay = room.game.aiReplay.at(-1);
+    expect(replay?.summary).toContain("EXTERNAL Director");
+    expect(replay?.candidates[0]?.violations.map((violation) => violation.id)).toContain("F-06");
+    expect(replay?.candidates[1]?.violations.map((violation) => violation.id)).toContain("F-04");
+    expect(room.directorStatus()).toMatchObject({
+      requestCount: 1,
+      appliedCount: 1,
+      fixtureFallbackCount: 0,
+      staleResponseCount: 0,
+    });
+  });
+
+  it("keeps one Director request in flight and ignores its response after a Room restart", async () => {
+    let settle: ((value: unknown) => void) | undefined;
+    const pending = new Promise<unknown>((resolve) => {
+      settle = resolve;
+    });
+    let requestCount = 0;
+    let requestSignal: AbortSignal | undefined;
+    const roomRef: { current: MatchRoom | null } = { current: null };
+    const fixture = roomFixture({
+      directorTimeoutMs: 10_000,
+      directorAdapter: (observation, signal) => {
+        requestCount += 1;
+        requestSignal = signal;
+        const currentRoom = roomRef.current;
+        if (currentRoom === null) throw new Error("Room is not ready");
+        const response = {
+          requestId: observation.requestId,
+          stageSpec: structuredClone(currentRoom.game.stageSpec),
+          candidates: createFixturePatchCandidates(
+            observation.sequence,
+            directorVerifierContextOf(currentRoom.game),
+          ),
+        };
+        return pending.then(() => response);
+      },
+    });
+    const room = fixture.room;
+    roomRef.current = room;
+    expect(room.join("connection-stale", { type: "JOIN", playerName: "Stale Player" }).ok).toBe(true);
+    while (room.game.nowMs < 5_000) room.tick(100);
+    for (let index = 0; index < 20; index += 1) room.tick(100);
+    expect(requestCount).toBe(1);
+    expect(room.directorStatus()?.inFlightRequestId).not.toBeNull();
+
+    const oldMatchId = room.game.matchId;
+    room.restart();
+    expect(room.game.matchId).not.toBe(oldMatchId);
+    expect(requestSignal?.aborted).toBe(true);
+    if (settle === undefined) throw new Error("Director request was not started");
+    settle(undefined);
+    await vi.waitFor(() => expect(room.directorStatus()?.staleResponseCount).toBe(1));
+
+    expect(room.game.mapVersion).toBe(1);
+    expect(room.game.cityCore.patchPhase).toBe("IDLE");
+    expect(room.game.aiReplay.filter((entry) => entry.phase === "CANDIDATES_EVALUATED")).toHaveLength(0);
+  });
+
+  it("falls back to the deterministic Fixture when the mock Director response is malformed", async () => {
+    const fixture = roomFixture({ directorAdapter: () => Promise.resolve({ malformed: true }) });
+    expect(fixture.room.join("connection-fallback", {
+      type: "JOIN",
+      playerName: "Fallback Player",
+    }).ok).toBe(true);
+    while (fixture.room.game.nowMs < 5_000) fixture.room.tick(100);
+    await vi.waitFor(() => expect(fixture.room.game.cityCore.patchPhase).toBe("PREPARED"));
+
+    expect(fixture.room.game.cityCore.activePatch?.patchId).toBe("patch-1-valid");
+    expect(fixture.room.game.aiReplay.at(-1)?.summary).toContain("FIXTURE Director");
+    expect(fixture.room.directorStatus()).toMatchObject({
+      requestCount: 1,
+      appliedCount: 1,
+      fixtureFallbackCount: 1,
+    });
+  });
+
+  it("aborts a timed-out Director adapter and continues with the deterministic Fixture", async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fixture = roomFixture({
+      directorTimeoutMs: 5,
+      directorAdapter: (_observation, signal) => {
+        requestSignal = signal;
+        return new Promise(() => undefined);
+      },
+    });
+    expect(fixture.room.join("connection-timeout", {
+      type: "JOIN",
+      playerName: "Timeout Player",
+    }).ok).toBe(true);
+    while (fixture.room.game.nowMs < 5_000) fixture.room.tick(100);
+    await vi.waitFor(() => expect(fixture.room.game.cityCore.patchPhase).toBe("PREPARED"));
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(fixture.room.game.cityCore.activePatch?.patchId).toBe("patch-1-valid");
+    expect(fixture.room.directorStatus()).toMatchObject({
+      requestCount: 1,
+      appliedCount: 1,
+      fixtureFallbackCount: 1,
+      inFlightRequestId: null,
+    });
+  });
+
   it("lets the first guest select the fixed demo profile without allowing later joins to switch it", () => {
     const { room } = roomFixture();
     const first = room.join("connection-demo", {
