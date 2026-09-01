@@ -1,0 +1,28 @@
+FROM node:24.13.0-bookworm-slim AS build
+
+WORKDIR /app
+COPY . .
+RUN npm ci --ignore-scripts --include-workspace-root --workspace=@dopagaki/director-api
+RUN ./node_modules/.bin/esbuild apps/director-api/src/index.ts \
+  --bundle \
+  --platform=node \
+  --format=esm \
+  --target=node24 \
+  --sourcemap \
+  --external:@google/adk \
+  --outfile=dist/director-api.mjs
+
+FROM node:24.13.0-bookworm-slim AS runtime
+
+ENV NODE_ENV=production
+ENV PORT=8080
+ENV NODE_OPTIONS=--enable-source-maps
+WORKDIR /app
+COPY . .
+RUN npm ci --ignore-scripts --omit=dev --omit=optional --workspace=@dopagaki/director-api
+COPY --from=build /app/dist/director-api.mjs ./dist/director-api.mjs
+COPY --from=build /app/dist/director-api.mjs.map ./dist/director-api.mjs.map
+
+USER node
+EXPOSE 8080
+CMD ["node", "dist/director-api.mjs"]

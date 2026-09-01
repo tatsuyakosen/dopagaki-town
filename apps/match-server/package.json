@@ -7,6 +7,7 @@
     "@dopagaki/contracts": "*",
     "@dopagaki/game-core": "*",
     "@dopagaki/verifier": "*",
+    "google-auth-library": "^10.3.0",
     "ws": "^8.21.3"
   }
 }

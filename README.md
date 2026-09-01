@@ -40,7 +40,9 @@ PORT=8080 DIRECTOR_PROVIDER=fixture npm run dev:director
 DIRECTOR_ADAPTER=http DIRECTOR_URL=http://127.0.0.1:8080 npm run dev:server
 ```
 
-実Gemini／ADKはDirector API processだけNode.js 24.13以上で起動し、`DIRECTOR_PROVIDER=gemini-adk`を設定します。Gemini APIの`GEMINI_API_KEY`、またはVertex AIの`GOOGLE_GENAI_USE_VERTEXAI=1`、`GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`をversion管理外で渡します。未設定、timeout、不正JSON、Schema違反、Verifier全拒否では試合を止めずFixtureへ縮退します。
+実Gemini／ADKはDirector API processだけNode.js 24.13以上で起動し、`DIRECTOR_PROVIDER=gemini-adk`を設定します。Gemini APIの`GEMINI_API_KEY`、またはGoogle Cloudの`GOOGLE_GENAI_USE_ENTERPRISE=TRUE`、`GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`をversion管理外で渡します。未設定、timeout、不正JSON、Schema違反、Verifier全拒否では試合を止めずFixtureへ縮退します。
+
+Cloud Run stagingではpublic Match Serverとprivate Director APIの2 imageに分け、Service AccountのID tokenでservice-to-service認証します。container smoke、権限前提、手動deploy、staging gateは[`ops/cloudrun/README.md`](ops/cloudrun/README.md)にあります。
 
 操作:
 

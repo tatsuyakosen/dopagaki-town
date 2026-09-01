@@ -1,0 +1,22 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file
+      - ops/cloudrun/Dockerfile.match
+      - --tag
+      - ${_MATCH_IMAGE}
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file
+      - ops/cloudrun/Dockerfile.director
+      - --tag
+      - ${_DIRECTOR_IMAGE}
+      - .
+images:
+  - ${_MATCH_IMAGE}
+  - ${_DIRECTOR_IMAGE}
+options:
+  logging: CLOUD_LOGGING_ONLY

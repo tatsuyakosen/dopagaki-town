@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+AGENTS.md
+docs
+node_modules
+**/node_modules
+apps/game-client/dist
+playwright-report
+test-results
+coverage
+*.log
+tests
+**/test
+scripts

@@ -1,7 +1,6 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, extname, join, normalize } from "node:path";
-import { fileURLToPath } from "node:url";
+import { extname, join, normalize } from "node:path";
 import {
   ClientMessageSchema,
   encodeMessage,
@@ -10,6 +9,7 @@ import {
 } from "@dopagaki/contracts";
 import { WebSocket, WebSocketServer } from "ws";
 import { MatchRoom } from "./room.js";
+import { createGoogleIdTokenFetch } from "./director-auth.js";
 import { createDirectorHttpAdapter } from "./director-http-adapter.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "3001", 10);
@@ -38,12 +38,22 @@ const directorUrl = process.env.DIRECTOR_URL;
 if (DIRECTOR_ADAPTER === "http" && directorUrl === undefined) {
   throw new Error("DIRECTOR_URL is required when DIRECTOR_ADAPTER=http");
 }
+const DIRECTOR_AUTH = process.env.DIRECTOR_AUTH ?? "none";
+if (DIRECTOR_AUTH !== "none" && DIRECTOR_AUTH !== "google-id-token") {
+  throw new Error("DIRECTOR_AUTH must be none or google-id-token");
+}
+if (DIRECTOR_AUTH === "google-id-token" && DIRECTOR_ADAPTER !== "http") {
+  throw new Error("DIRECTOR_AUTH=google-id-token requires DIRECTOR_ADAPTER=http");
+}
 const configuredDirectorTimeoutMs = Number.parseInt(process.env.DIRECTOR_TIMEOUT_MS ?? "8000", 10);
 const DIRECTOR_TIMEOUT_MS = Number.isFinite(configuredDirectorTimeoutMs) && configuredDirectorTimeoutMs > 0
   ? configuredDirectorTimeoutMs
   : 8_000;
+const directorFetch = DIRECTOR_AUTH === "google-id-token" && directorUrl !== undefined
+  ? createGoogleIdTokenFetch(process.env.DIRECTOR_AUDIENCE ?? new URL(directorUrl).origin)
+  : fetch;
 const directorAdapter = DIRECTOR_ADAPTER === "http" && directorUrl !== undefined
-  ? createDirectorHttpAdapter(directorUrl)
+  ? createDirectorHttpAdapter(directorUrl, directorFetch)
   : undefined;
 
 const room = new MatchRoom({
@@ -184,7 +194,7 @@ function handleMessage(socket: WebSocket, connectionId: string, payload: string)
   }
 }
 
-const clientDist = normalize(join(dirname(fileURLToPath(import.meta.url)), "../../game-client/dist"));
+const clientDist = normalize(process.env.CLIENT_DIST ?? join(process.cwd(), "apps/game-client/dist"));
 const mimeTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
