@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ClientMessageSchema,
+  DirectorApiResultSchema,
   DirectorResponseSchema,
   MapPatchSchema,
   MatchSnapshotSchema,
@@ -195,6 +196,19 @@ describe("runtime contracts", () => {
       requestId,
       stageSpec,
       candidates: [patch, patch, patch, patch],
+    })).toThrow();
+
+    expect(DirectorApiResultSchema.parse({
+      source: "GEMINI_ADK",
+      attempts: 2,
+      response: { requestId, stageSpec, candidates: [patch] },
+      failures: [{ attempt: 1, code: "SCHEMA", messages: ["invalid output"] }],
+    }).source).toBe("GEMINI_ADK");
+    expect(() => DirectorApiResultSchema.parse({
+      source: "FIXTURE",
+      attempts: 2,
+      response: { requestId, stageSpec, candidates: [patch] },
+      failures: [{ attempt: 2, code: "SCHEMA", messages: ["missing first failure"] }],
     })).toThrow();
   });
 });

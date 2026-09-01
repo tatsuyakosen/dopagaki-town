@@ -10,6 +10,7 @@ import {
 } from "@dopagaki/contracts";
 import { WebSocket, WebSocketServer } from "ws";
 import { MatchRoom } from "./room.js";
+import { createDirectorHttpAdapter } from "./director-http-adapter.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "3001", 10);
 const STANDARD_MATCH_DURATION_MS = Number.parseInt(
@@ -29,6 +30,21 @@ const STANDARD_SEED = Number.parseInt(
   10,
 );
 const DEMO_SEED = Number.parseInt(process.env.DEMO_MATCH_SEED ?? "20260827", 10);
+const DIRECTOR_ADAPTER = process.env.DIRECTOR_ADAPTER ?? "fixture";
+if (DIRECTOR_ADAPTER !== "fixture" && DIRECTOR_ADAPTER !== "http") {
+  throw new Error("DIRECTOR_ADAPTER must be fixture or http");
+}
+const directorUrl = process.env.DIRECTOR_URL;
+if (DIRECTOR_ADAPTER === "http" && directorUrl === undefined) {
+  throw new Error("DIRECTOR_URL is required when DIRECTOR_ADAPTER=http");
+}
+const configuredDirectorTimeoutMs = Number.parseInt(process.env.DIRECTOR_TIMEOUT_MS ?? "8000", 10);
+const DIRECTOR_TIMEOUT_MS = Number.isFinite(configuredDirectorTimeoutMs) && configuredDirectorTimeoutMs > 0
+  ? configuredDirectorTimeoutMs
+  : 8_000;
+const directorAdapter = DIRECTOR_ADAPTER === "http" && directorUrl !== undefined
+  ? createDirectorHttpAdapter(directorUrl)
+  : undefined;
 
 const room = new MatchRoom({
   seed: STANDARD_SEED,
@@ -37,6 +53,10 @@ const room = new MatchRoom({
   demoDurationMs: DEMO_MATCH_DURATION_MS,
   patchIntervalMs: PATCH_INTERVAL_MS,
   humanSpeedMultiplier: HUMAN_SPEED_MULTIPLIER,
+  ...(directorAdapter === undefined ? {} : {
+    directorAdapter,
+    directorTimeoutMs: DIRECTOR_TIMEOUT_MS,
+  }),
 });
 let connectionSequence = 0;
 const clients = new Map<WebSocket, string>();

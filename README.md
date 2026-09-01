@@ -2,15 +2,15 @@
 
 PLAYER vs PLAYER vs CITY — 街そのものが試合へ介入する、ローカルファーストのマルチプレイヤー鬼ごっこです。
 
-現在のM7提出品質では、アカウント登録なしのGuest Modeから、固定Seedの3分デモまたは10分通常試合へ入城できます。最初のGuestが選んだモードをMatch ServerがRoom設定として確定し、後から参加するクライアントがSeedや試合時間を上書きすることはできません。
+現在のM8では、アカウント登録なしのGuest Modeから、固定Seedの3分デモまたは10分通常試合へ入城できます。最初のGuestが選んだモードをMatch ServerがRoom設定として確定し、後から参加するクライアントがSeedや試合時間を上書きすることはできません。
 
 5km×5kmを250m角の400論理チャンクとして構成します。クライアントは進行方向の5×5を先読みし、3×3だけを低ポリ建物・簡略Colliderのactive範囲として実体化します。後方チャンクは破棄され、遠方参加者は441 nodeの広域道路グラフ上だけで更新されます。
 
-Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確定します。Fixture Directorは最大3件の都市介入候補を生成し、VerifierがF-01〜F-08、A*経路探索、3戦略rolloutで検証して1件だけを採用します。CITY COREは5秒以上前に範囲・理由・期待効果を告知し、`raise_barrier`、`open_alley`、`spawn_rooftop_bridge`をprepare後に一括commitします。クライアントchecksumが一致しない場合は直前の地図へrollbackします。
+Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確定します。既定のFixture Directorまたは任意のGemini／ADK Director APIは最大3件の都市介入候補を生成し、VerifierがF-01〜F-08、A*経路探索、3戦略rolloutで検証して1件だけを採用します。外部応答はSeed、requestId、MapVersionを照合し、2回の再計画でも安全候補がなければFixtureへ戻ります。CITY COREは5秒以上前に範囲・理由・期待効果を告知し、`raise_barrier`、`open_alley`、`spawn_rooftop_bridge`をprepare後に一括commitします。クライアントchecksumが一致しない場合は直前の地図へrollbackします。
 
 全員が1,000円を持って開始し、大阪・福島・天満・中崎町・京橋・西九条のFixture鉄道を利用できます。Seedから現実1秒＝ゲーム内6秒の時刻表を生成し、予約時の運賃hold、発車時の確定減算、乗り遅れ・取消時の解除を`reservationId`で冪等化します。乗車中はタッチ不可、到着後3秒間は保護されます。
 
-ブラウザは`playerToken`をsession storageへ保持し、通信断またはreloadから30秒以内なら同じプレイヤーへ自動復帰します。切断中の人間は停止してタッチ対象外になり、鬼が切断した場合は10秒後にBotが引き継ぎます。入力sequence、event ID、MapVersionで再送を冪等化し、クライアント予測＋server reconciliation、10Hz snapshot、RTT P95診断を備えます。外部サービスや秘密情報は使いません。
+ブラウザは`playerToken`をsession storageへ保持し、通信断またはreloadから30秒以内なら同じプレイヤーへ自動復帰します。切断中の人間は停止してタッチ対象外になり、鬼が切断した場合は10秒後にBotが引き継ぎます。入力sequence、event ID、MapVersionで再送を冪等化し、クライアント予測＋server reconciliation、10Hz snapshot、RTT P95診断を備えます。既定のローカル起動は外部サービスや秘密情報を使いません。
 
 ## 必要環境
 
@@ -30,6 +30,17 @@ npm run dev
 ```
 
 表示された `http://localhost:5173` を開き、3分デモまたは10分通常を選んで「ゲストで入城する」を押します。メールアドレス、実名、外部ログインは不要です。
+
+### 任意のDirector API
+
+Director APIのFixture境界だけをcredential-freeで起動できます。別terminalで次を実行してから、Match ServerへHTTP adapterを指定します。Director APIがFixtureを返した場合も、最終的なfallback候補はMatch Serverが同じSeedからローカル生成します。
+
+```bash
+PORT=8080 DIRECTOR_PROVIDER=fixture npm run dev:director
+DIRECTOR_ADAPTER=http DIRECTOR_URL=http://127.0.0.1:8080 npm run dev:server
+```
+
+実Gemini／ADKはDirector API processだけNode.js 24.13以上で起動し、`DIRECTOR_PROVIDER=gemini-adk`を設定します。Gemini APIの`GEMINI_API_KEY`、またはVertex AIの`GOOGLE_GENAI_USE_VERTEXAI=1`、`GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`をversion管理外で渡します。未設定、timeout、不正JSON、Schema違反、Verifier全拒否では試合を止めずFixtureへ縮退します。
 
 操作:
 
@@ -111,7 +122,7 @@ E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動�
 
 - ローカルMatch Serverは単一のin-memory Roomです。マッチメイク、複数Room、ランキングは対象外です。
 - Room checkpointは同一プロセス内の復元用です。Match Serverプロセス再起動後の永続復旧は未対応です。
-- Directorと鉄道は既定で決定論的Fixtureを使用します。Gemini／ADK、実ダイヤ、遅延・運休、駅すぱあとMCPには接続しません。
+- Directorと鉄道は既定で決定論的Fixtureを使用します。Gemini／ADK Directorは任意のfeature flagであり、実ダイヤ、遅延・運休、駅すぱあとMCPにはまだ接続しません。
 - 都市はLOW向け低ポリ表示です。大阪Photorealistic 3D Tilesと駅構内3Dは未統合です。
 - 操作対象はPCブラウザとキーボードです。モバイル操作、ゲームパッド、音声チャットは対象外です。
 - 外部APIキー、Docker、Google Cloud、Firestore Emulatorを使わないローカルMVPです。
@@ -121,6 +132,7 @@ E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動�
 ```text
 apps/game-client       Babylon.jsによる低ポリ都市とHUD
 apps/match-server      authoritative WebSocket Match Server、再接続session、Room checkpoint
+apps/director-api      Fixture／Gemini ADK切替、2回再計画、HTTP境界
 packages/contracts     ZodによるRuntime Schema
 packages/game-core     決定論的なゲームルールとBot
 packages/transit-core  Fixture Transit Graph、Seed時刻表、外部adapter fallback

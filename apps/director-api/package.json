@@ -1,0 +1,14 @@
+{
+  "name": "@dopagaki/director-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@dopagaki/contracts": "*",
+    "@dopagaki/verifier": "*",
+    "@google/adk": "2.0.0"
+  },
+  "devDependencies": {
+    "@dopagaki/game-core": "*"
+  }
+}

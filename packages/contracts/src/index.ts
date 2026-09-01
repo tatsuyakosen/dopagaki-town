@@ -293,6 +293,48 @@ export const DirectorResponseSchema = z.object({
   candidates: z.array(MapPatchSchema).min(1).max(3),
 });
 
+export const DirectorAttemptFailureSchema = z.object({
+  attempt: z.number().int().min(1).max(2),
+  code: z.enum(["GENERATOR", "SCHEMA", "IDENTITY", "VERIFIER"]),
+  messages: z.array(z.string().min(1)).min(1).max(12),
+});
+
+export const DirectorApiResultSchema = z.object({
+  source: z.enum(["FIXTURE", "GEMINI_ADK"]),
+  attempts: z.number().int().min(0).max(2),
+  response: DirectorResponseSchema,
+  failures: z.array(DirectorAttemptFailureSchema).max(2),
+}).superRefine((result, context) => {
+  if (result.source === "GEMINI_ADK" && result.attempts < 1) {
+    context.addIssue({ code: "custom", path: ["attempts"], message: "Gemini ADK requires an attempt" });
+  }
+  if (result.source === "FIXTURE" && result.attempts !== 0 && result.attempts !== 2) {
+    context.addIssue({ code: "custom", path: ["attempts"], message: "Fixture uses zero attempts or two failed attempts" });
+  }
+  if (result.failures.length > result.attempts) {
+    context.addIssue({ code: "custom", path: ["failures"], message: "Failures cannot exceed attempts" });
+  }
+  const expectedFailureCount = result.source === "GEMINI_ADK"
+    ? result.attempts - 1
+    : result.attempts;
+  if (result.failures.length !== expectedFailureCount) {
+    context.addIssue({
+      code: "custom",
+      path: ["failures"],
+      message: "Failures must describe every unsuccessful attempt",
+    });
+  }
+  for (const [index, entry] of result.failures.entries()) {
+    if (entry.attempt !== index + 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["failures", index, "attempt"],
+        message: "Failure attempts must be consecutive",
+      });
+    }
+  }
+});
+
 export const ConstraintIdSchema = z.enum([
   "F-01",
   "F-02",
@@ -448,6 +490,8 @@ export type DirectorStationObservation = z.infer<typeof DirectorStationObservati
 export type DirectorMutationAnchor = z.infer<typeof DirectorMutationAnchorSchema>;
 export type DirectorObservation = z.infer<typeof DirectorObservationSchema>;
 export type DirectorResponse = z.infer<typeof DirectorResponseSchema>;
+export type DirectorAttemptFailure = z.infer<typeof DirectorAttemptFailureSchema>;
+export type DirectorApiResult = z.infer<typeof DirectorApiResultSchema>;
 export type ConstraintId = z.infer<typeof ConstraintIdSchema>;
 export type ConstraintViolation = z.infer<typeof ConstraintViolationSchema>;
 export type PatchEvaluation = z.infer<typeof PatchEvaluationSchema>;
