@@ -10,6 +10,19 @@ spec.loader.exec_module(converter)
 
 
 class ConverterTests(unittest.TestCase):
+    def test_earcut_keeps_courtyard_hole(self):
+        rings=[[[0,0,0],[10,0,0],[10,0,10],[0,0,10]],[[3,0,3],[3,0,7],[7,0,7],[7,0,3]]]
+        points,indices=converter.triangulate_rings(rings)
+        area=0
+        for i in range(0,len(indices),3):
+            a,b,c=[points[j] for j in indices[i:i+3]]
+            area+=abs(converter.cross([a[0],a[2]],[b[0],b[2]],[c[0],c[2]]))/2
+        self.assertAlmostEqual(area,84)
+        self.assertEqual(points,[p for ring in rings for p in ring])
+
+    def test_earcut_rejects_nonplanar_surface(self):
+        with self.assertRaises(ValueError): converter.triangulate_rings([[[0,0,0],[10,0,0],[10,3,10],[0,0,10]]])
+
     def test_origin_and_axes(self):
         origin = [34.705,135.4967,3]
         self.assertEqual(converter.local_point(origin, origin), [0,0,0])

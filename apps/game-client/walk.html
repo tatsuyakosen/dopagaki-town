@@ -10,15 +10,16 @@
   <body>
     <canvas id="walk-canvas" tabindex="0" aria-label="街歩き3D画面。WASDで移動、Shiftでダッシュ、矢印キーで視点変更"></canvas>
     <header class="topbar">
-      <a href="/">DOPAGAKI <span>TOWN</span></a>
+      <a href="/map.html">DOPAGAKI <span>TOWN</span> / 地図へ</a>
       <span class="mode-tag">WALK LAB / SOLO</span>
       <button id="pause" type="button" disabled>一時停止</button>
     </header>
     <main id="notice" class="notice" aria-live="polite">
-      <p class="eyebrow">UMEDA / DATA-FIRST WALK</p>
+      <p class="eyebrow">YOUR CITY / DATA-FIRST WALK</p>
       <h1>街のデータを確認中</h1>
       <p id="load-message">出典情報と歩行可能な地面を読み込んでいます。</p>
       <a id="fixture-link" href="/walk.html?fixture=1" hidden>架空の検証ステージで操作を試す</a>
+      <a href="/map.html">地図で街区を選ぶ</a>
       <button id="start" type="button" hidden>歩き始める</button>
     </main>
     <aside id="walk-hud" hidden>
@@ -27,6 +28,7 @@
         <h2 id="place-name"></h2>
         <p id="scope"></p>
         <p id="metrics" aria-live="off"></p>
+        <p id="performance-note" aria-live="polite"></p>
       </section>
       <div class="toolbar">
         <label>描画品質 <select id="quality"><option value="balanced">標準</option><option value="low">軽量</option><option value="high">高品質</option></select></label>

@@ -46,7 +46,7 @@ function geometry(source: CityMesh): VertexData {
   return data;
 }
 
-export function createWalkWorld(scene: Scene, manifest: CityManifest, shadows: ShadowGenerator): WalkWorld {
+export async function createWalkWorld(scene: Scene, manifest: CityManifest, shadows: ShadowGenerator, progress:(done:number,total:number)=>void=()=>{}): Promise<WalkWorld> {
   const visualRoot = new TransformNode("survey-visual-world",scene);
   const collisionRoot = new TransformNode("survey-collision-world",scene);
   const overlay = new TransformNode("game-overlay-not-survey",scene);
@@ -64,6 +64,7 @@ export function createWalkWorld(scene: Scene, manifest: CityManifest, shadows: S
   const terrain = new StandardMaterial("survey-terrain",scene);
   terrain.diffuseColor=Color3.FromHexString("#686766");terrain.specularColor.set(0,0,0);terrain.backFaceCulling=false;
   const collisionMaterial=new StandardMaterial("collision-two-sided",scene);collisionMaterial.backFaceCulling=false;
+  let yieldedAt=performance.now(),done=0;
   for (const source of manifest.meshes) {
     const data=geometry(source);
     const mesh=new Mesh(`visual-${source.id}`,scene);data.applyToMesh(mesh);
@@ -74,7 +75,10 @@ export function createWalkWorld(scene: Scene, manifest: CityManifest, shadows: S
     collision.parent=collisionRoot;collision.material=collisionMaterial;collision.isVisible=false;
     collision.checkCollisions=true;collision.isPickable=true;collision.freezeWorldMatrix();colliders.add(collision);
     if(source.kind!=="building") surfaces.add(collision);
+    done++;
+    if(performance.now()-yieldedAt>6){progress(done,manifest.meshes.length);await new Promise<void>(resolve=>setTimeout(resolve,0));yieldedAt=performance.now();}
   }
+  facade.freeze();road.freeze();terrain.freeze();collisionMaterial.freeze();
   const borderMaterial = new StandardMaterial("test-boundary",scene);
   borderMaterial.diffuseColor=Color3.FromHexString("#f3bc78");borderMaterial.emissiveColor=new Color3(.15,.08,.02);
   const half=manifest.playableHalfSize;

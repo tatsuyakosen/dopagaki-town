@@ -11,7 +11,7 @@
     "node": "^22.0.0 || >=24.13.0"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,client -c magenta,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev": "tsx scripts/dev.ts",
     "dev:server": "tsx watch apps/match-server/src/index.ts",
     "dev:client": "vite --config apps/game-client/vite.config.ts",
     "dev:director": "tsx watch apps/director-api/src/index.ts",
@@ -27,6 +27,9 @@
     "test:headless": "vitest run packages/game-core/test/headless.test.ts",
     "test:e2e": "playwright test",
     "check:publish": "node --import tsx scripts/repository-safety.ts",
+    "check:city-bundle": "node --import tsx scripts/check-city-bundle.ts",
+    "verify:city-walk": "node --import tsx scripts/verify-city-walk.ts",
+    "preview:client": "vite preview --config apps/game-client/vite.config.ts --host 127.0.0.1",
     "test:city-converter": "python3 -m unittest discover -s tests/city -p 'test_*.py'",
     "test:soak:m6": "playwright test --config playwright.soak.config.ts",
     "test:soak": "tsx scripts/run-m7-soak.ts",

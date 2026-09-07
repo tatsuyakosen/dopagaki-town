@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#101b29"><title>街を選ぶ | DOPAGAKI TOWN</title></head>
+<body>
+  <header><a class="brand" href="/">DOPAGAKI <span>TOWN</span></a><span>街を選ぶ</span><a href="/walk.html?fixture=1">操作を試す</a></header>
+  <main>
+    <section class="map-panel" aria-label="日本地図">
+      <div id="map"></div>
+      <div class="map-hint">歩いてみたい場所をクリック <span>外枠 1km / 最初の街区 250m</span></div>
+      <nav class="places" aria-label="地図の移動先"><button data-place="34.705,135.4967">梅田</button><button data-place="35.6815,139.764">丸の内</button><button data-place="35.443,139.638">横浜</button><button id="japan">日本全体</button></nav>
+      <p id="tile-error" hidden>地図画像を取得できません。接続を確認するか、緯度・経度で選択してください。</p>
+    </section>
+    <aside>
+      <p class="eyebrow">YOUR NEXT PLAYGROUND</p><h1>この街を、歩こう。</h1>
+      <p class="intro">地図で場所を選び、実データから街区を組み立てます。</p>
+      <form id="coordinates"><label>緯度<input id="latitude" type="number" step="0.000001" min="20" max="46" value="34.705" required></label><label>経度<input id="longitude" type="number" step="0.000001" min="122" max="154" value="135.4967" required></label><button type="submit">この座標へ</button></form>
+      <label class="quality-label">描画品質<select id="quality"><option value="low">軽量・速さを優先</option><option value="balanced" selected>標準・形状を優先</option></select></label>
+      <button id="check" class="primary">この範囲のデータを確認</button>
+      <section id="selection" aria-live="polite"><h2 id="area-name">エリアを選択</h2><p id="availability">最初に中央の250m街区を構築します。道路・建物のデータが必要です。</p><p id="source-summary"></p><p id="planner-status"></p></section>
+      <button id="build" class="primary" hidden>街を構築する</button>
+      <section id="job" hidden aria-live="polite"><h2 id="job-title">街を準備中</h2><progress id="progress" max="100" value="0"></progress><p id="job-detail"></p><p id="elapsed"></p><button id="cancel">構築を中止</button></section>
+      <a id="play" class="primary play" hidden>この街に入る</a>
+      <details><summary>再現の範囲とデータの扱い</summary><p>建物・道路はデータ整備時の形状です。外壁材・窓・夕景は演出です。地下・建物内部・現在の通行規制は含みません。</p><p>地図画像は国土地理院、都市モデルはPLATEAUを利用します。地図の表示範囲は提供元へ送信されます。現在地の自動取得は行いません。</p><p>大きすぎるデータや対応外の形状は構築を止め、架空の街に置き換えません。</p></details>
+    </aside>
+  </main>
+  <script type="module" src="/src/map/main.ts"></script>
+</body></html>

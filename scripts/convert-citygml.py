@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Bounded CityGML 2.0 -> local mesh manifest. No network, no credentials.
 
-Only explicit EPSG:6697 / 3D coordinates and simple planar polygon rings are
-supported. Holes, XLinks and unsupported geometry fail closed in selected
-input files; textures are not imported. Never infer missing geometry.
+Only explicit EPSG:6697 / 3D coordinates and planar polygon rings are supported.
+Earcut preserves interior rings; XLinks and unsupported geometry fail closed.
+Textures are not imported. Never infer missing geometry.
 """
 import argparse
 import datetime
@@ -90,6 +90,10 @@ def ring_points(polygon, origin):
     if polygon.find("gml:interior", NS) is not None:
         raise ValueError("Polygon holes require a reviewed external triangulator")
     ring = polygon.find("gml:exterior/gml:LinearRing", NS)
+    return read_ring(ring, origin)
+
+
+def read_ring(ring, origin):
     if ring is None:
         raise ValueError("Explicit exterior LinearRing required")
     poslist = ring.find("gml:posList", NS)
@@ -108,6 +112,41 @@ def ring_points(polygon, origin):
     if len(points) > 2000:
         raise ValueError("Ring exceeds triangulation budget")
     return points
+
+
+def polygon_rings(polygon, origin):
+    rings = [read_ring(polygon.find("gml:exterior/gml:LinearRing", NS), origin)]
+    rings.extend(read_ring(interior.find("gml:LinearRing", NS), origin)
+                 for interior in polygon.findall("gml:interior", NS))
+    return rings
+
+
+def triangulate_rings(rings):
+    """Preserve holes using Earcut; check the projected area, keep original XYZ."""
+    import mapbox_earcut
+    import numpy as np
+    outer = rings[0]
+    normal = [sum((a[(i+1)%3]-b[(i+1)%3])*(a[(i+2)%3]+b[(i+2)%3])
+                  for a,b in zip(outer,outer[1:]+outer[:1])) for i in range(3)]
+    length = math.sqrt(sum(v*v for v in normal))
+    if length < 1e-6: raise ValueError("Degenerate polygon")
+    points = [p for ring in rings for p in ring]
+    if any(abs(sum((v-b)*n/length for v,b,n in zip(p,outer[0],normal))) > .05 for p in points):
+        raise ValueError("Non-planar polygon exceeds 5cm tolerance")
+    omit = max(range(3), key=lambda i: abs(normal[i]))
+    flat = np.array([[v for i,v in enumerate(p) if i != omit] for p in points], dtype=np.float64)
+    ends = np.cumsum([len(r) for r in rings],dtype=np.uint32)
+    indices = mapbox_earcut.triangulate_float64(flat, ends).tolist()
+    areas = []
+    start = 0
+    for end in ends:
+        ring = flat[start:int(end)].tolist();start = int(end)
+        areas.append(abs(sum(a[0]*b[1]-b[0]*a[1] for a,b in zip(ring,ring[1:]+ring[:1])))/2)
+    target = areas[0]-sum(areas[1:])
+    actual = sum(abs(cross(flat[indices[i]],flat[indices[i+1]],flat[indices[i+2]]))/2 for i in range(0,len(indices),3))
+    if target <= 0 or abs(actual-target) > max(.001,target*1e-5):
+        raise ValueError("Triangulation area mismatch")
+    return points, indices
 
 
 def public_url(value):
@@ -133,7 +172,7 @@ def scan_source(path):
     return digest.hexdigest()
 
 
-def convert(paths, metadata, origin, half_size, spawn):
+def convert(paths, metadata, origin, half_size, spawn, max_lod=2, title="大阪・梅田 / 実データ街区"):
     required = {"title","provider","datasetYear","surveyYear","url","license","licenseUrl","attribution","retrievedAt"}
     if set(metadata) != required:
         raise ValueError("Source metadata fields must exactly match the documented schema")
@@ -147,8 +186,8 @@ def convert(paths, metadata, origin, half_size, spawn):
         raise ValueError("Survey year must be a year or null (unknown)")
     if not all(math.isfinite(v) for v in [*origin,*spawn,half_size]) or not 20 <= half_size <= 500:
         raise ValueError("Invalid extent or origin")
-    if not (34.69 <= origin[0] <= 34.72 and 135.48 <= origin[1] <= 135.515):
-        raise ValueError("This profile is limited to the Umeda area")
+    if not (20 <= origin[0] <= 46 and 122 <= origin[1] <= 154):
+        raise ValueError("This profile is limited to Japan")
     if any(any(word in metadata[key].lower() for word in ["todo", "replace", "記入", "未確認"]) for key in ["title","provider","license","attribution"]):
         raise ValueError("Replace template metadata only after source review")
     if abs(spawn[0]) >= half_size-1 or abs(spawn[2]) >= half_size-1:
@@ -182,7 +221,7 @@ def convert(paths, metadata, origin, half_size, spawn):
             if kind is None:
                 node.clear();continue
             geometries = []
-            preferred = ["lod2MultiSurface","lod2Solid","lod1Solid"] if kind == "building" else ["lod2MultiSurface","lod1MultiSurface","TriangulatedSurface","Tin"]
+            preferred = (["lod2MultiSurface","lod2Solid","lod1Solid"] if max_lod >= 2 else ["lod1Solid"]) if kind == "building" else ["lod1MultiSurface","TriangulatedSurface","Tin"]
             for tag in preferred:
                 geometries = [g for g in obj.iter() if g.tag.split("}")[-1] == tag]
                 if geometries:
@@ -195,16 +234,17 @@ def convert(paths, metadata, origin, half_size, spawn):
             polygons = [g for root in geometries for g in root.iter() if g.tag.split("}")[-1] in ("Polygon", "Triangle")]
             if not polygons:
                 raise ValueError("Object has no supported polygons")
-            rings = [ring_points(polygon, origin) for polygon in polygons]
-            all_points = [p for ring in rings for p in ring]
+            compounds = [polygon_rings(polygon, origin) for polygon in polygons]
+            all_points = [p for rings in compounds for ring in rings for p in ring]
             # Keep whole geometry intersecting the block: do not fabricate cut walls.
             if (max(p[0] for p in all_points) < -half_size or min(p[0] for p in all_points) > half_size or
                 max(p[2] for p in all_points) < -half_size or min(p[2] for p in all_points) > half_size):
                 node.clear();continue
             positions, indices = [], []
-            for ring in rings:
+            for rings in compounds:
+                ring, triangles = triangulate_rings(rings)
                 base = len(positions)//3
-                indices.extend(i+base for i in triangulate(ring))
+                indices.extend(i+base for i in triangles)
                 positions.extend(v for point in ring for v in point)
             meshes.append({"id":f"mesh-{len(meshes):05d}","kind":kind,"positions":positions,"indices":indices})
             node.clear()
@@ -212,10 +252,10 @@ def convert(paths, metadata, origin, half_size, spawn):
                 raise ValueError("One-block geometry budget exceeded")
     if not any(m["kind"] == "building" for m in meshes) or not any(m["kind"] != "building" for m in meshes):
         raise ValueError("Both measured buildings and road/terrain surfaces are required")
-    return {"version":1,"mode":"survey","title":"大阪・梅田 / 実データ街区",
+    return {"version":1,"mode":"survey","title":title,
             "coordinateSystem":"LOCAL_ENU_Y_UP_METERS","origin":dict(zip(["latitude","longitude","altitude"],origin)),
             "extentMeters":1000,"playableHalfSize":half_size,"spawn":spawn,"sources":sources,"meshes":meshes,
-            "limitations":["形状は出典データの年度に対応します。現在の大阪の完全再現ではありません。",
+            "limitations":["形状は出典データの年度に対応します。現在の街の完全再現ではありません。",
             "外壁材・窓・夕景は汎用の演出で、実際の外観や点灯状態を示しません。原データのテクスチャは未取込です。",
             "1km四方は計画範囲です。今回の変換は開始街区と交差する地物に限定し、街区境界はゲーム用制約です。",
             "GRS80局所接平面を使用。標高を近傍相対高度として扱い、ジオイド補正は未実施です。測量精度は保証しません。",
