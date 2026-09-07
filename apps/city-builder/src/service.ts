@@ -23,12 +23,10 @@ type Entry={catalog:Catalog;createdAt:number};
 export function runWorker(request:unknown, signal:AbortSignal, progress:(value:Progress)=>void=()=>{}):Promise<unknown> {
   return new Promise((resolve,reject)=>{
     signal.throwIfAborted();
-    const environment:NodeJS.ProcessEnv={PATH:process.env.PATH ?? "",PYTHONUNBUFFERED:"1"};
+    const environment:NodeJS.ProcessEnv={PATH:process.env.PATH ?? "",TSX_DISABLE_CACHE:"1"};
     // Preserve configured network transport, while keeping AI keys out of the converter.
-    for(const name of ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","http_proxy","https_proxy","no_proxy","SSL_CERT_FILE","SSL_CERT_DIR"]){if(process.env[name])environment[name]=process.env[name];}
-    const virtualPython=`${root}.venv/${process.platform==="win32"?"Scripts/python.exe":"bin/python"}`;
-    const python=process.env.CITY_PYTHON ?? (existsSync(virtualPython)?virtualPython:"python3");
-    const child=spawn(python,[`${root}scripts/city-worker.py`],{cwd:root,stdio:["pipe","pipe","ignore"],env:environment});
+    for(const name of ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","http_proxy","https_proxy","no_proxy","SSL_CERT_FILE","SSL_CERT_DIR","NODE_EXTRA_CA_CERTS","SystemRoot","TEMP","TMP"]){if(process.env[name])environment[name]=process.env[name];}
+    const child=spawn(process.execPath,["--import",fileURLToPath(import.meta.resolve("tsx")),`${root}scripts/city-worker.ts`],{cwd:root,stdio:["pipe","pipe","ignore"],env:environment});
     let buffer="",bytes=0,result:unknown,code="WORKER_FAILED";
     const stop=()=>{child.kill("SIGKILL");};
     const timer=setTimeout(()=>{code="BUILD_TIMEOUT";stop();},240_000);
@@ -91,7 +89,7 @@ export class CityBuilder {
   start(catalogId:string,quality:Quality):Job {
     const entry=this.catalogs.get(catalogId);
     if(!entry || Date.now()-entry.createdAt>15*60*1000)throw new Error("CATALOG_EXPIRED");
-    const key=hash(JSON.stringify(["converter-v2",entry.catalog,quality,this.status().planner]));
+    const key=hash(JSON.stringify(["converter-ts-v1",entry.catalog,quality,this.status().planner]));
     const previous=this.jobs.get(this.completed.get(key)??"");
     if(previous?.stageId && Date.now()-previous.createdAt<TTL && existsSync(`${stages}/${previous.stageId}.json`) && existsSync(`${stages}/${previous.stageId}.gz`))return previous;
     if(this.active)throw new Error("BUSY");

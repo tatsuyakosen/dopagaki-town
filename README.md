@@ -12,7 +12,7 @@ PLAYER vs PLAYER vs CITY — 街そのものが試合へ介入する、ローカ
 
 ## 地図から実都市の街区を構築
 
-`npm ci`、Pythonのvenv作成と `requirements-city.txt` の導入後、`npm run dev:client` を実行して `/map.html` を開きます。
+Node.js 22.19以上（22系）または24.13以上で `npm ci --ignore-scripts` → `npm run dev:client` を実行し、`/map.html` を開きます。取得・変換もTypeScriptで動作します。
 地図で選択 → データを確認 → 街を構築 → この街に入る、の順に操作します。詳しいOS別手順は下のリンクを参照してください。
 元の都市データは同梱せず、公式PLATEAU APIで必要な建物・道路を取得します。Match Server・AI・APIキーなしで自動構築できます。
 地図の初回JavaScriptは約47.5KB gzip。変換は別プロセスで行い、取得容量・頂点数・同時ジョブ数を制限し、完成した街区をgzip配信・再利用します。
@@ -37,7 +37,7 @@ Match Serverが移動、鬼、タッチ、鬼時間、勝敗、MapVersionを確�
 
 ## 必要環境
 
-- Node.js 22
+- Node.js 22.19以上（22系）、または24.13以上
 - npm 10以降
 - PCブラウザ（Chrome推奨）
 
@@ -136,7 +136,7 @@ E2Eは試合時間とCITY CORE間隔を短縮した専用Match Serverを起動�
 
 | 症状 | 確認と対処 |
 |---|---|
-| `npm run dev`直後も`SERVER OFFLINE`と表示される | Node.js 22を使用し、Match Serverのport 3001が空いているか確認します。別portを使う場合は`PORT`と`VITE_MATCH_PORT`を同じ値にします。 |
+| `npm run dev`直後も`SERVER OFFLINE`と表示される | 対応するNode.jsを使用し、Match Serverのport 3001が空いているか確認します。別portを使う場合は`PORT`と`VITE_MATCH_PORT`を同じ値にします。 |
 | ブラウザをreloadすると`SESSION EXPIRED`になる | 再接続windowは30秒です。再度「ゲストで入城する」を押すと新しい参加者として開始します。 |
 | 鉄道ボタンが有効にならない | 駅から180m以内へ移動し、残高と次の便を確認します。駅付近ではボタンまたは`E`キーで予約できます。 |
 | E2EがChrome executableエラーで開始しない | `/usr/bin/google-chrome`を利用できるPC環境で実行するか、Playwright設定の`executablePath`を手元のChromeへ合わせます。 |

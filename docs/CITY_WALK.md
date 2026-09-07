@@ -6,22 +6,20 @@
 
 ## 起動
 
-Node.js 22 または24.13以上、Python 3.10以上、npm、WebGL対応のPCブラウザが必要です。
+Node.js 22.19以上（22系）または24.13以上、npm、WebGL対応のPCブラウザが必要です。
 AIを使う場合はNode.js 24.13以上が必要です。
 
 ```sh
-npm ci
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-city.txt
+npm ci --ignore-scripts
 npm run dev:client
 ```
 
 表示されたURLの `/map.html` を開きます。梅田を選択 → 「この範囲のデータを確認」→「街を構築する」→「この街に入る」。
 都市データの手動取得・変換は通常の操作に不要です。初回は配布元への通信に数十秒かかる場合があり、実際の処理段階を表示します。
 
-Windowsでは `py -m venv .venv`、`.venv\Scripts\python.exe -m pip install -r requirements-city.txt` を使います。
-構築サービスはプロジェクト内のvenvを自動検出します。別のPythonを使う場合だけ、サーバーの `CITY_PYTHON` に実行ファイルを指定します。
-venvを有効化して `npm run test:city-converter` を実行するか、venvのPythonからunittestを直接実行してください。
+Windowsでも同じnpmコマンドで起動します。Python・venv・pipの準備は不要です。
+取得・XML解析・座標変換・三角形化をTypeScriptへ統一し、別Node.jsプロセスで実行します。
+変換テストだけを実行する場合は `npm run test:city-converter`。通常の `npm test` にも含まれます。
 
 既存の架空都市PvPも動かす場合は `npm run dev`。ブラウザは `/` が既存PvP、`/walk.html?fixture=1` が明示的な架空の操作検証です。
 引数をViteへ渡す開発用ラッパーを追加し、既存Match Serverも維持しています。
@@ -72,7 +70,12 @@ FPSの閾値は制御設定であり、実機で達成済みのFPSではあり�
 
 ## データ取得・変換
 
-実装: `scripts/city-worker.py`、`scripts/convert-citygml.py`、`apps/city-builder/src/`。
+実装: `scripts/city-worker.ts`、`scripts/convert-citygml.ts`、`apps/city-builder/src/`。
+
+XMLは [saxes](https://github.com/lddubeau/saxes) で街区の地物単位に読み、外部entity・DTDを拒否します。
+三角形化には [Earcut](https://github.com/mapbox/earcut) を使い、元のXYZを保持して主平面へ投影し、穴を差し引いた面積を検査します。
+metadata ZIPは [yauzl](https://github.com/thejoshwolfe/yauzl) で該当XMLだけを最大2MiBまで読み、ディスクへ展開しません。
+これらはサーバー用の依存です。都市データの取得・変換コードを地図の初回バンドルには含めません。
 
 1. [PLATEAU CityGML API](https://docs.plateauview.mlit.go.jp/datasets/citygml/)へ選択街区のbboxを問い合わせ、建物・道路ファイルを解決します。
 2. 自治体ごとに返された最新整備年度を選びます。複数自治体が重なる結果は現在拒否します。
@@ -94,11 +97,11 @@ FPSの閾値は制御設定であり、実機で達成済みのFPSではあり�
 手動取得済みデータにも変換器を利用できます。同一データセットの年度・条件を確認したメタデータを指定します。
 
 ```sh
-python3 scripts/convert-citygml.py \
+npm run convert:city -- \
   data/raw/building.gml data/raw/road.gml \
   --source-metadata .local/source-metadata.json \
-  --origin 34.705 135.4967 0 \
-  --block-half-size 125 --spawn 6.28 0.95 -11.02 \
+  --origin 34.705,135.4967,0 \
+  --block-half-size 125 --spawn 6.28,0.95,-11.02 \
   --out apps/game-client/public/city-data/umeda-block.json
 ```
 

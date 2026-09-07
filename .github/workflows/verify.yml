@@ -19,13 +19,11 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: python3 -m pip install -r requirements-city.txt
       - run: npm run check:publish
       - run: npm run check:publish -- --history
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - run: npm run test:city-converter
       - run: npm run build
       - run: npm run check:city-bundle
       - run: npm audit --audit-level=high

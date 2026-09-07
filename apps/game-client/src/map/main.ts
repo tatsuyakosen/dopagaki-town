@@ -25,7 +25,7 @@ const errors:Record<string,string>={
   GEOMETRY_BUDGET:"形状が描画容量の上限を超えます。軽量モードか別の街区をお試しください。",
   NO_SAFE_SPAWN:"安全に歩き始められる道路面を見つけられませんでした。中心を移動してください。",
   BUSY:"別の確認または構築を実行中です。完了後に再度お試しください。",
-  DEPENDENCIES_MISSING:"構築環境が未準備です。起動手順のPython依存関係を確認してください。",
+  DEPENDENCIES_MISSING:"構築環境が未準備です。Node.jsのバージョンとnpm ciの実行を確認してください。",
   CATALOG_EXPIRED:"データ確認の有効時間が切れました。もう一度データを確認してください。",
   BUILD_TIMEOUT:"構築が制限時間を超えました。再試行するか別の街区を選んでください。",
 };
