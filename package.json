@@ -26,6 +26,8 @@
     "test:watch": "vitest",
     "test:headless": "vitest run packages/game-core/test/headless.test.ts",
     "test:e2e": "playwright test",
+    "check:publish": "node --import tsx scripts/repository-safety.ts",
+    "test:city-converter": "python3 -m unittest discover -s tests/city -p 'test_*.py'",
     "test:soak:m6": "playwright test --config playwright.soak.config.ts",
     "test:soak": "tsx scripts/run-m7-soak.ts",
     "test:soak:smoke": "tsx scripts/run-m7-soak.ts --matches=2 --duration-ms=30000 --sample-ms=1000 --progress-ms=10000",

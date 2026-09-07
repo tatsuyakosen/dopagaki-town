@@ -9,7 +9,12 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    sourcemap: true,
+    sourcemap: false,
+    rollupOptions: {
+      input: {
+        game: fileURLToPath(new URL("index.html", import.meta.url)),
+        walk: fileURLToPath(new URL("walk.html", import.meta.url)),
+      },
+    },
   },
 });
-

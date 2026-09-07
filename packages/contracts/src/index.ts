@@ -1,4 +1,5 @@
 import { z } from "zod";
+export { CityManifestSchema, CityMeshSchema, type CityManifest, type CityMesh } from "./city.js";
 
 export const Vec2Schema = z.object({
   x: z.number().finite(),

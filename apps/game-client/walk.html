@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111a27" />
+    <meta name="description" content="DOPAGAKI TOWN — 出典を確認できる実都市街歩きプロトタイプ" />
+    <title>DOPAGAKI TOWN | 街歩き</title>
+  </head>
+  <body>
+    <canvas id="walk-canvas" tabindex="0" aria-label="街歩き3D画面。WASDで移動、Shiftでダッシュ、矢印キーで視点変更"></canvas>
+    <header class="topbar">
+      <a href="/">DOPAGAKI <span>TOWN</span></a>
+      <span class="mode-tag">WALK LAB / SOLO</span>
+      <button id="pause" type="button" disabled>一時停止</button>
+    </header>
+    <main id="notice" class="notice" aria-live="polite">
+      <p class="eyebrow">UMEDA / DATA-FIRST WALK</p>
+      <h1>街のデータを確認中</h1>
+      <p id="load-message">出典情報と歩行可能な地面を読み込んでいます。</p>
+      <a id="fixture-link" href="/walk.html?fixture=1" hidden>架空の検証ステージで操作を試す</a>
+      <button id="start" type="button" hidden>歩き始める</button>
+    </main>
+    <aside id="walk-hud" hidden>
+      <section class="location">
+        <p class="eyebrow" id="dataset-kind">DATASET</p>
+        <h2 id="place-name"></h2>
+        <p id="scope"></p>
+        <p id="metrics" aria-live="off"></p>
+      </section>
+      <div class="toolbar">
+        <label>描画品質 <select id="quality"><option value="balanced">標準</option><option value="low">軽量</option><option value="high">高品質</option></select></label>
+        <button id="reset" type="button">開始地点へ</button>
+        <button id="gate" type="button" hidden>検証ゲート：開</button>
+      </div>
+      <details class="credits">
+        <summary>データ出典・再現の範囲</summary>
+        <div id="provenance"></div>
+      </details>
+      <p class="controls">WASD 移動 · Shift ダッシュ · ドラッグ／矢印キー 視点 · Esc 停止<br />地下・建物内部は対象外。夕景・窓の光は演出です。</p>
+    </aside>
+    <script type="module" src="/src/walk/main.ts"></script>
+  </body>
+</html>

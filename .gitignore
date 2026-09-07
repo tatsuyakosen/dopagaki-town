@@ -6,3 +6,37 @@ test-results/
 *.log
 .DS_Store
 
+# Credentials and workstation-only configuration (keep the sanitized template).
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*service-account*.json
+*credentials*.json
+.npmrc
+.venv/
+__pycache__/
+*.pyc
+
+# City sources / converted runtime assets must be obtained separately.
+data/raw/
+data/processed/
+apps/game-client/public/city-data/
+*.gml
+*.citygml
+*.city.json
+*.glb
+*.gltf
+*.b3dm
+*.i3dm
+*.pnts
+*.3tz
+*.zip
+*.7z
+
+# Do not publish local audit logs, traces or screenshots.
+artifacts/
+.local/
