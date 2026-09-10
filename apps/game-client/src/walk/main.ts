@@ -108,7 +108,10 @@ async function boot():Promise<void> {
     function reset():void{keys.clear();verticalSpeed=0;player.position.copyFrom(safePosition);}
     pause.disabled=false;pause.addEventListener("click",()=>setPaused(!paused));
     start.addEventListener("click",()=>{setPaused(false);start.textContent="再開する";});
-    element("reset").addEventListener("click",reset);
+    element("reset").addEventListener("click",()=>{
+      if(streamer&&!streamer.canEnter(spawn.x,spawn.z)){location.reload();return;}
+      safePosition.copyFrom(spawn);reset();
+    });
     const gateButton=element<HTMLButtonElement>("gate");gateButton.hidden=manifest.mode!=="fixture";
     gateButton.addEventListener("click",()=>{
       if(!gateClosed && Math.abs(player.position.x)<17 && Math.abs(player.position.z-20)<1.5){gateButton.textContent="ゲートから少し離れてください";return;}
