@@ -1,15 +1,17 @@
-import { join } from "node:path";
 import { z } from "zod";
 import { CatalogSchema, type Catalog } from "./contracts.js";
 import { convert, type Metadata } from "./converter.js";
-import { CACHE, FILE_LIMIT, TOTAL_LIMIT, discover, sha256, sourceClient } from "./source.js";
+import { FILE_LIMIT, TOTAL_LIMIT, discover, sourceClient } from "./source.js";
+import { geometryClient, type GeometryDownload } from "./geometry-source.js";
 import { chooseSpawn } from "./spawn.js";
 import { AreaTileSchema, tileBounds, type AreaTile } from "../../../packages/contracts/src/area.js";
 import { addTerrain } from "./terrain.js";
 
 export type Progress={phase:string;completed?:number;total?:number;bytes?:number;vertices?:number};
-/** At most two buffers are fetched together; only paths and hashes survive the batch. */
-export async function downloadGeometry(catalog:Catalog,download=sourceClient(),progress:(value:Progress)=>void=()=>{}){
+/** At most two streams are fetched together; only paths and hashes survive the batch. */
+export async function downloadGeometry(catalog:Catalog,download?:GeometryDownload,progress:(value:Progress)=>void=()=>{}){
+  if(catalog.files.some(f=>f.bytes>FILE_LIMIT)||catalog.files.reduce((n,f)=>n+f.bytes,0)>TOTAL_LIMIT)throw new Error("SOURCE_TOO_LARGE");
+  const acquire=download??await geometryClient(catalog.files.map(f=>f.url));
   const paths:string[]=[],byHash=new Map<string,string>(),sourceMetadata=new Map<string,Metadata>();
   let received=0,hits=0,completed=0;
   const metadataFor=(dataset:{city:string;year:number;metadataUrl:string}):Metadata=>({title:dataset.city+" 3D都市モデル "+dataset.year+"年度",provider:dataset.city+" / Project PLATEAU",
@@ -19,9 +21,8 @@ export async function downloadGeometry(catalog:Catalog,download=sourceClient(),p
   for(let at=0;at<catalog.files.length;at+=2){
     progress({phase:"download",completed,total:catalog.files.length,bytes:received});
     const batch=await Promise.allSettled(catalog.files.slice(at,at+2).map(async source=>{
-      const {data,hit}=await download(source.url,FILE_LIMIT);received+=data.length;
+      const {path,digest,bytes,hit}=await acquire(source.url,FILE_LIMIT);received+=bytes;
       if(received>TOTAL_LIMIT)throw new Error("SOURCE_TOO_LARGE");
-      const path=join(CACHE,sha256(source.url)),digest=sha256(data);
       const dataset=catalog.datasets?.find(d=>d.fileUrls.includes(source.url));
       if(catalog.datasets&&!dataset)throw new Error("SOURCE_METADATA_AMBIGUOUS");
       sourceMetadata.set(path,dataset?metadataFor(dataset):metadata);hits+=Number(hit);completed++;
@@ -35,8 +36,8 @@ export async function downloadGeometry(catalog:Catalog,download=sourceClient(),p
 
 export async function build(catalog:Catalog,lod:1|2,progress:(value:Progress)=>void=()=>{},tile?:AreaTile){
   const started=performance.now(),download=sourceClient();
-  const {paths,byHash,sourceMetadata,metadata,received,hits}=await downloadGeometry(catalog,download,progress);
-  const downloaded=performance.now();progress({phase:"convert",bytes:received});
+  const {paths,byHash,sourceMetadata,metadata,received,hits}=await downloadGeometry(catalog,undefined,progress);
+  const downloaded=performance.now(),downloadPeakRssBytes=process.resourceUsage().maxRSS*1024;progress({phase:"convert",bytes:received});
   const origin=tile??catalog,bounds=tile?tileBounds(tile):undefined;
   const manifest=await convert(paths,metadata,[origin.latitude,origin.longitude,0],tile?500:125,[0,1,0],lod,catalog.city+" / 選択した街",bounds,sourceMetadata);
   for(const source of manifest.sources){const url=byHash.get(source.sha256);if(!url)throw new Error("SOURCE_CHANGED");source.url=url;}
@@ -54,8 +55,8 @@ export async function build(catalog:Catalog,lod:1|2,progress:(value:Progress)=>v
   const bytes=Buffer.byteLength(JSON.stringify(manifest));if(bytes>4*1024*1024)throw new Error("GEOMETRY_BUDGET");
   return {manifest,stats:{sourceBytes:received,sourceCacheHits:hits,vertices,meshes:manifest.meshes.length,manifestBytes:bytes,
     terrainTiles:terrainStats.tiles,terrainBytes:terrainStats.bytes,drapedRoads:terrainStats.drapedRoads,alignedBuildings:terrainStats.alignedBuildings,
-    downloadSeconds:(downloaded-started)/1000,convertSeconds:(converted-downloaded)/1000,terrainSeconds:(terrainDone-converted)/1000,
-    validateSeconds:(performance.now()-terrainDone)/1000,workerSeconds:(performance.now()-started)/1000}};
+    downloadSeconds:(downloaded-started)/1000,downloadPeakRssBytes,convertSeconds:(converted-downloaded)/1000,terrainSeconds:(terrainDone-converted)/1000,
+    validateSeconds:(performance.now()-terrainDone)/1000,workerSeconds:(performance.now()-started)/1000,workerPeakRssBytes:process.resourceUsage().maxRSS*1024}};
 }
 
 const RequestSchema=z.discriminatedUnion("action",[

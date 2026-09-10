@@ -7,8 +7,9 @@ import { fromBuffer, type Entry } from "yauzl";
 import { z } from "zod";
 import { CatalogSchema, SelectionSchema, type Catalog } from "./contracts.js";
 import { content, descendants, readXml, type XmlNode } from "./xml.js";
+import { FILE_LIMIT, TOTAL_LIMIT } from "./limits.js";
 
-export const FILE_LIMIT=32*1024*1024,TOTAL_LIMIT=64*1024*1024;
+export { FILE_LIMIT, TOTAL_LIMIT } from "./limits.js";
 export const CACHE=fileURLToPath(new URL("../../../.local/city-build/sources/",import.meta.url));
 export const sha256=(value:string|Uint8Array):string=>createHash("sha256").update(value).digest("hex");
 export type Download=(url:string,limit:number,cache?:boolean)=>Promise<{data:Buffer;hit:boolean}>;
