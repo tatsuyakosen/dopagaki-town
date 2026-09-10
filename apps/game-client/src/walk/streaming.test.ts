@@ -41,10 +41,11 @@ describe("predictive and cached streaming",()=>{
     const stream=new AreaStreamer(manifest(),w,"balanced",vi.fn(),vi.fn());stream.update(0,0,{x:7,z:0});await vi.advanceTimersByTimeAsync(300);
     expect(w.addBlock).toHaveBeenCalledOnce();expect(stream.canEnter(126,0)).toBe(true);expect(fetcher).toHaveBeenCalledTimes(2);expect(stream.stats.cacheHits).toBe(1);stream.dispose();
   });
-  it("retries transient busy responses without immediately declaring the block unavailable",async()=>{
+  it("waits for other walkers without exhausting the network failure budget",async()=>{
     vi.useFakeTimers();const fetcher=vi.fn(()=>Promise.resolve(new Response(JSON.stringify({code:"BUSY"}),{status:429})));vi.stubGlobal("fetch",fetcher);
     const stream=new AreaStreamer(manifest(),world(),"low",vi.fn(),vi.fn());stream.update(0,0);await vi.advanceTimersByTimeAsync(300);
-    expect(stream.failedKeys.size).toBe(0);await vi.advanceTimersByTimeAsync(2100);stream.update(0,0);await vi.advanceTimersByTimeAsync(300);expect(fetcher).toHaveBeenCalledTimes(2);stream.dispose();
+    for(let i=0;i<20;i++){await vi.advanceTimersByTimeAsync(3100);stream.update(0,0);await vi.advanceTimersByTimeAsync(300);}
+    expect(stream.failedKeys.size).toBe(0);expect(fetcher).toHaveBeenCalledTimes(21);stream.dispose();
   });
 });
 

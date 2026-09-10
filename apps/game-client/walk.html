@@ -11,7 +11,7 @@
     <canvas id="walk-canvas" tabindex="0" aria-label="街歩き3D画面。WASDで移動、Shiftでダッシュ、矢印キーで視点変更"></canvas>
     <header class="topbar">
       <a href="/map.html">DOPAGAKI <span>TOWN</span> / 地図へ</a>
-      <span class="mode-tag">WALK LAB / SOLO</span>
+      <span class="mode-tag" id="mode-tag">自由に街歩き / ひとり</span>
       <button id="pause" type="button" disabled>一時停止</button>
     </header>
     <main id="notice" class="notice" aria-live="polite">
@@ -22,6 +22,7 @@
       <a href="/map.html">地図で街区を選ぶ</a>
       <button id="start" type="button" hidden>歩き始める</button>
     </main>
+    <div id="friend-labels" aria-hidden="true"></div>
     <aside id="walk-hud" hidden>
       <section class="location">
         <p class="eyebrow" id="dataset-kind">DATASET</p>
@@ -35,6 +36,28 @@
         <button id="reset" type="button">開始地点へ</button>
         <button id="gate" type="button" hidden>検証ゲート：開</button>
       </div>
+      <details id="social-panel" class="social-panel" hidden open>
+        <summary>友達と街歩き <span>最大4人</span></summary>
+        <p id="social-status" role="status"></p>
+        <label for="social-name">表示名</label>
+        <input id="social-name" maxlength="20" required value="ゲスト" autocomplete="off" />
+        <div class="social-actions">
+          <button id="social-create" type="button">友達を招待する</button>
+          <button id="social-join" type="button" hidden>このルームに参加する</button>
+          <button id="social-copy" type="button" hidden>招待リンクをコピー</button>
+          <button id="social-leave" type="button" hidden>退出する</button>
+        </div>
+        <input id="social-invite" aria-label="招待リンク。コピーして共有してください" readonly hidden />
+        <ul id="social-members" aria-label="同じ街の参加者"></ul>
+        <div id="social-chat" hidden>
+          <div id="social-log" role="log" aria-label="ルームのチャット" aria-live="polite" aria-relevant="additions"></div>
+          <form id="social-form">
+            <label for="social-message">ルームにひとこと</label>
+            <div class="social-compose"><input id="social-message" maxlength="140" autocomplete="off" placeholder="ここで待ってるよ" disabled /><button id="social-send" type="submit" disabled>送信</button></div>
+          </form>
+        </div>
+        <p class="social-footnote">招待した相手に表示名と街の中の位置が共有されます。チャットはこのルーム内だけで表示します。</p>
+      </details>
       <section id="area-map" hidden aria-label="1kmエリアの読み込み状況">
         <p>北 ↑ · 1km × 1km</p><canvas id="area-canvas" width="160" height="160" aria-label="青は歩ける街区、橙色は読込中、暗色は未読込、茶色は取得失敗、黄色は現在地"></canvas>
         <p>青：歩ける · 橙：読込中</p><p id="stream-status" role="status">周辺の街区を準備します。</p>

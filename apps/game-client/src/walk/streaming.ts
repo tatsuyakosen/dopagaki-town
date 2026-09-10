@@ -99,7 +99,10 @@ export class AreaStreamer {
     }catch(error){
       if(!this.controller.signal.aborted){
         const code=error instanceof Error?error.message:"BUILD_FAILED",count=(this.attempts.get(key)?.count??0)+1;
-        if(["BUSY","SOURCE_TIMEOUT","SOURCE_UNAVAILABLE","BUILD_TIMEOUT"].includes(code)&&count<=3){
+        if(code==="BUSY"){
+          // Other walkers share the single conversion worker. Waiting is not a failed tile.
+          this.attempts.set(key,{count:count-1,after:Date.now()+3000});this.notify("別の街区を準備中です。順番に読み込みます。");
+        }else if(["SOURCE_TIMEOUT","SOURCE_UNAVAILABLE","BUILD_TIMEOUT"].includes(code)&&count<=3){
           this.attempts.set(key,{count,after:Date.now()+1000*2**count});this.notify("通信を待っています。周辺の読み込みを自動で再試行します。");
         }else{
           this.failed.set(key,code);

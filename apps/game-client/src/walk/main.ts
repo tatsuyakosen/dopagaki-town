@@ -22,6 +22,7 @@ import { createWalkWorld, type WalkWorld } from "./world.js";
 import { CollisionGrid } from "./spatial.js";
 import { AreaStreamer } from "./streaming.js";
 import { drawMinimap } from "./minimap.js";
+import { WalkSocial } from "./social.js";
 import "./style.css";
 
 function element<T extends HTMLElement>(id:string):T {
@@ -61,7 +62,7 @@ function credits(manifest:CityManifest):void {
 async function boot():Promise<void> {
   const loadedAt=performance.now();
   let phase="data";
-  let engine:Engine|null=null;let world:WalkWorld|null=null;let streamer:AreaStreamer|undefined;
+  let engine:Engine|null=null;let world:WalkWorld|null=null;let streamer:AreaStreamer|undefined;let social:WalkSocial|undefined;
   try{
     const manifest=await readManifest();
     phase="engine";
@@ -105,6 +106,9 @@ async function boot():Promise<void> {
     const hit=scene.pickWithRay(spawnRay,(mesh)=>activeWorld.colliders.has(mesh as Mesh)&&mesh.isEnabled());
     if(!hit?.hit||!hit.pickedPoint||!activeWorld.surfaces.has(hit.pickedMesh as Mesh))throw new Error("UNSAFE_SPAWN");
     spawn.y=hit.pickedPoint.y+.95;player.position.copyFrom(spawn);
+    const params=new URLSearchParams(location.search);
+    social=new WalkSocial(scene,player,manifest.mode==="fixture"?"fixture":params.get("stage"),()=>paused,
+      (x,z)=>streamer?streamer.isReady(x,z):Math.abs(x)<=manifest.playableHalfSize&&Math.abs(z)<=manifest.playableHalfSize);
     function setPaused(value:boolean):void{paused=value;keys.clear();pause.textContent=value?"再開":"一時停止";notice.hidden=!value;if(value){notice.querySelector("h1")!.textContent="街歩きを一時停止";message.textContent="再開すると同じ場所から歩けます。";}else canvas.focus();}
     function reset():void{keys.clear();verticalSpeed=0;player.position.copyFrom(safePosition);}
     pause.disabled=false;pause.addEventListener("click",()=>setPaused(!paused));
@@ -127,10 +131,11 @@ async function boot():Promise<void> {
     const controls=new Set(["KeyW","KeyA","KeyS","KeyD","ShiftLeft","ShiftRight","ArrowLeft","ArrowRight","ArrowUp","ArrowDown"]);
     window.addEventListener("keydown",(event)=>{
       if(event.code==="Escape"){setPaused(true);return;}
-      if(paused || (event.target instanceof Element && event.target.closest("button,select,a,input,summary")))return;
+      if(paused || (event.target instanceof Element && event.target.closest("button,select,a,input,textarea,summary")))return;
       if(controls.has(event.code)){event.preventDefault();keys.add(event.code);}
     });
     window.addEventListener("keyup",(event)=>keys.delete(event.code));
+    window.addEventListener("focusin",event=>{if(event.target instanceof Element&&event.target.closest("input,textarea,button,select"))keys.clear();});
     window.addEventListener("blur",()=>{drag=false;setPaused(true);});
     document.addEventListener("visibilitychange",()=>{if(document.hidden)setPaused(true);});
     canvas.addEventListener("pointerdown",(event)=>{if(paused)return;drag=true;canvas.setPointerCapture(event.pointerId);});
@@ -147,6 +152,7 @@ async function boot():Promise<void> {
     let metricsAt=0,slowSeconds=0,autoReduced=initialLow;
     scene.onBeforeRenderObservable.add(()=>{
       const frameMs=engine!.getDeltaTime(),dt=frameSeconds(frameMs);
+      social?.update(dt);
       if(recorder&&!recorder.complete&&!paused&&!document.hidden){
         if(recordingActive){
           const heap=(performance as Performance&{memory?:{usedJSHeapSize?:number}}).memory?.usedJSHeapSize;
@@ -204,12 +210,12 @@ async function boot():Promise<void> {
     message.textContent=manifest.mode==="fixture"?"このステージは操作と夕景表現の検証用です。大阪・梅田の街並みではありません。":"建物と地面は記録された年度のデータです。外装・窓・夕景は演出で、現在の外観や通行可能性を保証しません。";
     if(new URLSearchParams(location.search).get("autostart")==="1")setPaused(false);
     window.addEventListener("resize",()=>engine!.resize());
-    window.addEventListener("pagehide",(event)=>{if(event.persisted){setPaused(true);return;}streamer?.dispose();activeWorld.dispose();scene.dispose();engine!.dispose();});
+    window.addEventListener("pagehide",(event)=>{if(event.persisted){setPaused(true);return;}social?.dispose();streamer?.dispose();activeWorld.dispose();scene.dispose();engine!.dispose();});
   }catch(error){
     const detail=error instanceof Error?error.message:"";
     const code=/webgl/i.test(detail)?"WEBGL_UNAVAILABLE":/^[A-Z_]{3,40}$/.test(detail)?detail:"RENDER_OR_DATA_INVALID";
     console.error("CITY_WALK_FAILED "+JSON.stringify({phase,code}));
-    streamer?.dispose();world?.dispose();engine?.dispose();hud.hidden=true;pause.disabled=true;start.hidden=true;
+    social?.dispose();streamer?.dispose();world?.dispose();engine?.dispose();hud.hidden=true;pause.disabled=true;start.hidden=true;
     notice.hidden=false;notice.querySelector("h1")!.textContent="実都市データを利用できません";
     message.textContent="データの有効期限切れ・形式不正・容量超過・安全な開始地点がない、または3D描画に非対応です。地図から街区を作り直すか、描画環境を確認してください。";
     if(code==="WEBGL_UNAVAILABLE")message.textContent="このブラウザではWebGLを利用できません。PCブラウザのグラフィック設定を確認して開き直してください。";
