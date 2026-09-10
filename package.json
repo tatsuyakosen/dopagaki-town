@@ -36,7 +36,8 @@
     "test:soak": "tsx scripts/run-m7-soak.ts",
     "test:soak:smoke": "tsx scripts/run-m7-soak.ts --matches=2 --duration-ms=30000 --sample-ms=1000 --progress-ms=10000",
     "verify:local": "npm run lint && npm run typecheck && npm run test:faults && npm test && npm run build && npm run test:e2e",
-    "convert:city": "node --import tsx scripts/convert-citygml.ts"
+    "convert:city": "node --import tsx scripts/convert-citygml.ts",
+    "prepare:city-area": "node --import tsx scripts/prepare-city-area.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

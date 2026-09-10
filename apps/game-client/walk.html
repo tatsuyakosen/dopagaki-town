@@ -36,10 +36,17 @@
         <button id="gate" type="button" hidden>検証ゲート：開</button>
       </div>
       <section id="area-map" hidden aria-label="1kmエリアの読み込み状況">
-        <p>北 ↑ · 1km × 1km</p><canvas id="area-canvas" width="160" height="160" aria-label="青は歩ける街区、暗色は未読込、茶色は取得失敗、黄色は現在地"></canvas>
-        <p>青：歩ける範囲</p><p id="stream-status" role="status">周辺の街区を準備します。</p>
-        <button id="retry-area" type="button">周辺を再試行</button>
+        <p>北 ↑ · 1km × 1km</p><canvas id="area-canvas" width="160" height="160" aria-label="青は歩ける街区、橙色は読込中、暗色は未読込、茶色は取得失敗、黄色は現在地"></canvas>
+        <p>青：歩ける · 橙：読込中</p><p id="stream-status" role="status">周辺の街区を準備します。</p>
+        <button id="retry-area" type="button">周辺を再試行</button><a href="/map.html">別の場所を選ぶ</a>
       </section>
+      <details class="measurement">
+        <summary>動作の重さを計測</summary>
+        <p>歩行中の60秒を記録します。結果はこの端末だけに保存でき、外部へ送信しません。</p>
+        <button id="measure" type="button">60秒の計測を開始</button>
+        <p id="measurement-status" role="status"></p>
+        <button id="download-performance" type="button" hidden>計測結果を保存</button>
+      </details>
       <details class="credits">
         <summary>データ出典・再現の範囲</summary>
         <div id="provenance"></div>

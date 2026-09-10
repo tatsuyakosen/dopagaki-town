@@ -60,3 +60,16 @@ describe("bounded city jobs",()=>{
     expect(()=>builder.start(area.id,"low",{latitude:catalog.latitude,longitude:catalog.longitude,x:1,z:0})).toThrow("TILE_CATALOG_MISMATCH");
   });
 });
+
+describe("persistent neighboring blocks",()=>{
+  it("reuses a noncentral block after restarting the service and keeps quality/origin isolated",async()=>{
+    const tile={latitude:35.7,longitude:135.8,x:-1,z:0};
+    const {tileCoordinates}=await import("../../../packages/contracts/src/area.js");const coordinates=tileCoordinates(tile);
+    const worker:typeof runWorker=request=>Promise.resolve((request as {action:string}).action==="discover"?{...catalog,...coordinates}:{manifest:{...manifest,origin:{latitude:tile.latitude,longitude:tile.longitude,altitude:0},tile,playableHalfSize:500},stats:{}});
+    const builder=new CityBuilder(worker,planner),area=await builder.discover(coordinates.latitude,coordinates.longitude),job=builder.start(area.id,"low",tile);
+    await vi.waitFor(async()=>expect(await new CityBuilder().ready(tile.latitude,tile.longitude,"low",tile)).not.toBeNull());
+    const restarted=new CityBuilder();expect((await restarted.ready(tile.latitude,tile.longitude,"low",tile))?.stageId).toBe(job.stageId);
+    expect(await restarted.ready(tile.latitude,tile.longitude,"balanced",tile)).toBeNull();expect(await restarted.ready(tile.latitude,tile.longitude,"low",{...tile,x:1})).toBeNull();
+    await expect(restarted.ready(34,135,"low",tile)).rejects.toThrow("TILE_ORIGIN_MISMATCH");
+  });
+});

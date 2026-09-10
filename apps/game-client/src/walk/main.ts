@@ -1,3 +1,4 @@
+import { WalkPerformance } from "./performance.js";
 import { Engine } from "@babylonjs/core/Engines/engine.js";
 import { Scene } from "@babylonjs/core/scene.js";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera.js";
@@ -109,7 +110,7 @@ async function boot():Promise<void> {
     pause.disabled=false;pause.addEventListener("click",()=>setPaused(!paused));
     start.addEventListener("click",()=>{setPaused(false);start.textContent="再開する";});
     element("reset").addEventListener("click",()=>{
-      if(streamer&&!streamer.canEnter(spawn.x,spawn.z)){location.reload();return;}
+      if(streamer&&!streamer.isReady(spawn.x,spawn.z)){location.reload();return;}
       safePosition.copyFrom(spawn);reset();
     });
     const gateButton=element<HTMLButtonElement>("gate");gateButton.hidden=manifest.mode!=="fixture";
@@ -119,6 +120,7 @@ async function boot():Promise<void> {
     });
     element<HTMLSelectElement>("quality").addEventListener("change",(event)=>{
       const quality=(event.target as HTMLSelectElement).value;
+      streamer?.setQuality(quality==="low"?"low":"balanced");
       engine!.setHardwareScalingLevel(quality==="low"?2.25:quality==="high"?1:1.5);
       scene.shadowsEnabled=quality!=="low";engine!.resize();
     });
@@ -134,9 +136,25 @@ async function boot():Promise<void> {
     canvas.addEventListener("pointerdown",(event)=>{if(paused)return;drag=true;canvas.setPointerCapture(event.pointerId);});
     canvas.addEventListener("pointerup",()=>{drag=false;});canvas.addEventListener("pointercancel",()=>{drag=false;});
     canvas.addEventListener("pointermove",(event)=>{if(!drag||paused)return;yaw+=event.movementX*.005;pitch=Math.max(.05,Math.min(.95,pitch+event.movementY*.004));});
+    let recorder:WalkPerformance|undefined,recordingActive=false;
+    const measure=element<HTMLButtonElement>("measure"),downloadReport=element<HTMLButtonElement>("download-performance");
+    measure.addEventListener("click",()=>{recorder=new WalkPerformance();recordingActive=false;measure.disabled=true;downloadReport.hidden=true;element("measurement-status").textContent="歩行中の60秒を計測します。一時停止中は計測しません。";});
+    downloadReport.addEventListener("click",()=>{
+      if(!recorder?.complete)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(recorder.report(),null,2)],{type:"application/json"}));
+      const link=document.createElement("a");link.href=url;link.download="city-walk-performance.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
     let metricsAt=0,slowSeconds=0,autoReduced=initialLow;
     scene.onBeforeRenderObservable.add(()=>{
-      const dt=frameSeconds(engine!.getDeltaTime());
+      const frameMs=engine!.getDeltaTime(),dt=frameSeconds(frameMs);
+      if(recorder&&!recorder.complete&&!paused&&!document.hidden){
+        if(recordingActive){
+          const heap=(performance as Performance&{memory?:{usedJSHeapSize?:number}}).memory?.usedJSHeapSize;
+          recorder.add(frameMs,element<HTMLSelectElement>("quality").value,activeWorld.vertices,streamer?.stats.residentBlocks??1,heap);
+          if(recorder.complete){measure.disabled=false;downloadReport.hidden=false;const report=recorder.report();element("measurement-status").textContent=`平均 ${report.averageFps} FPS · 遅い側5%の境目 ${report.p95FrameMs}ms · 100ms超 ${report.framesOver100Ms}回`;}
+        }
+        recordingActive=true;
+      }else recordingActive=false;
       if(gridRevision!==activeWorld.revision){grid=new CollisionGrid(activeWorld.colliders);gridRevision=activeWorld.revision;lastCell="";}
       const cell=grid.key(player.position.x,player.position.z);
       if(cell!==lastCell){lastCell=cell;nearby=grid.nearby(player.position.x,player.position.z);player.surroundingMeshes=[...nearby];}
@@ -156,8 +174,8 @@ async function boot():Promise<void> {
         if(movement.x||movement.z)player.rotation.y=Math.atan2(movement.x,movement.z);
         if(player.position.y<lowestGround-10 || Math.abs(player.position.x)>manifest.playableHalfSize+2 || Math.abs(player.position.z)>manifest.playableHalfSize+2)reset();
         const ground=scene.pickWithRay(new Ray(player.position,Vector3.Down(),1.1),mesh=>activeWorld.surfaces.has(mesh as Mesh)&&nearby.has(mesh as Mesh));
-        if(ground?.hit&&ground.pickedPoint&&(!streamer||streamer.canEnter(player.position.x,player.position.z)))safePosition.copyFrom(player.position);
-        streamer?.update(player.position.x,player.position.z);
+        if(ground?.hit&&ground.pickedPoint&&(!streamer||streamer.isReady(player.position.x,player.position.z)))safePosition.copyFrom(player.position);
+        streamer?.update(player.position.x,player.position.z,{x:movement.x*movement.speed,z:movement.z*movement.speed});
       }
       const target=player.position.add(new Vector3(0,.65,0));
       const direction=new Vector3(-Math.sin(yaw)*Math.cos(pitch),Math.sin(pitch),-Math.cos(yaw)*Math.cos(pitch));
@@ -168,9 +186,10 @@ async function boot():Promise<void> {
       }
       camera.position.copyFrom(target.add(direction.scale(distance)));camera.setTarget(target);
       player.visibility=distance<1?.15:1;visor.visibility=player.visibility;
-      if(!paused && !autoReduced){slowSeconds=engine!.getFps()<24?slowSeconds+dt:Math.max(0,slowSeconds-dt);if(slowSeconds>5){autoReduced=true;engine!.setHardwareScalingLevel(2.25);scene.shadowsEnabled=false;engine!.resize();element<HTMLSelectElement>("quality").value="low";element("performance-note").textContent="動作を軽くするため描画品質を下げました。";}}
+      if(!paused && !autoReduced){slowSeconds=engine!.getFps()<24?slowSeconds+dt:Math.max(0,slowSeconds-dt);if(slowSeconds>5){autoReduced=true;streamer?.setQuality("low");engine!.setHardwareScalingLevel(2.25);scene.shadowsEnabled=false;engine!.resize();element<HTMLSelectElement>("quality").value="low";element("performance-note").textContent="動作を軽くするため描画品質を下げました。";}}
       if(performance.now()-metricsAt>500){metricsAt=performance.now();element("metrics").textContent=`${Math.round(engine!.getFps())} FPS · E ${player.position.x.toFixed(1)}m / N ${(-player.position.z).toFixed(1)}m`;
-        if(streamer)drawMinimap(element<HTMLCanvasElement>("area-canvas"),player.position.x,player.position.z,streamer.readyKeys,streamer.failedKeys);}
+        if(streamer)drawMinimap(element<HTMLCanvasElement>("area-canvas"),player.position.x,player.position.z,streamer.readyKeys,streamer.failedKeys,streamer.loadingKeys);
+        if(recorder&&!recorder.complete)element("measurement-status").textContent=`歩行中 ${Math.floor(recorder.seconds)} / 60秒を計測済み。${paused?"再開すると計測を続けます。":"周囲を見ながら歩いてください。"}`;}
     });
     credits(manifest);hud.hidden=false;
     engine.runRenderLoop(()=>scene.render());

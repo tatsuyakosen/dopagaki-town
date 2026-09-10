@@ -16,8 +16,10 @@
       <form id="coordinates"><label>緯度<input id="latitude" type="number" step="0.000001" min="20" max="46" value="34.705" required></label><label>経度<input id="longitude" type="number" step="0.000001" min="122" max="154" value="135.4967" required></label><button type="submit">この座標へ</button></form>
       <label class="quality-label">描画品質<select id="quality"><option value="low">軽量・速さを優先</option><option value="balanced" selected>標準・形状を優先</option></select></label>
       <button id="check" class="primary">この場所で歩く</button>
+      <button id="check-data">データの対応状況を確認</button>
       <p id="webgl-error" hidden role="alert">3D表示を利用できません。PCブラウザのグラフィック設定を確認してください。</p>
       <section id="selection" aria-live="polite"><h2 id="area-name">エリアを選択</h2><p id="availability">中央の街区ができたら入場します。周辺は歩きながら読み込みます。地域により構築できない場合があります。</p><p id="source-summary"></p><p id="planner-status"></p></section>
+      <section id="nearby" hidden><h2>近くの準備済みの街</h2><div id="nearby-places"></div></section>
       <button id="build" class="primary" hidden>もう一度構築する</button>
       <section id="job" hidden aria-live="polite"><h2 id="job-title">街を準備中</h2><progress id="progress" max="100" value="0"></progress><p id="job-detail"></p><p id="elapsed"></p><button id="cancel">構築を中止</button></section>
       <a id="play" class="primary play" hidden>この街に入る</a>

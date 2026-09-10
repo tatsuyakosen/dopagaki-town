@@ -27,7 +27,7 @@ function readRing(ring:XmlNode|undefined,toLocal:(p:Point)=>Point):Point[]{
 
 export async function convert(
   paths:string[],rawMetadata:unknown,origin:Point,halfSize:number,spawn:Point,
-  maxLod:1|2=2,title="大阪・梅田 / 実データ街区",bounds?:Bounds,
+  maxLod:1|2=2,title="大阪・梅田 / 実データ街区",bounds?:Bounds,sourceMetadata?:ReadonlyMap<string,Metadata>,
 ):Promise<CityManifest>{
   const metadata=MetadataSchema.parse(rawMetadata);
   for(const field of [metadata.title,metadata.provider,metadata.license,metadata.attribution]){
@@ -80,7 +80,7 @@ export async function convert(
       if(srs){if(!/(\/|:)6697$/.test(srs))throw new Error("CRS_UNSUPPORTED");crsChecked=true;}
     });
     if(seen.has(digest)){meshes.length=initialLength;vertices=initialVertices;continue;}
-    seen.add(digest);sources.push({...metadata,sha256:digest});
+    seen.add(digest);sources.push({...MetadataSchema.parse(sourceMetadata?.get(path)??metadata),sha256:digest});
   }
   if(!meshes.some(m=>m.kind==="building")||!meshes.some(m=>m.kind!=="building"))throw new Error("MISSING_ROADS_OR_BUILDINGS");
   return CityManifestSchema.parse({version:1,mode:"survey",title,coordinateSystem:"LOCAL_ENU_Y_UP_METERS",

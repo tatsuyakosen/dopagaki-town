@@ -21,13 +21,17 @@ export function createCityHandler(builder=new CityBuilder()):(req:IncomingMessag
     void (async()=>{
       if(req.method==="GET" && url.pathname==="/api/city/status"){send(200,builder.status());return;}
       if(req.method==="POST" && url.pathname==="/api/city/ready"){
+        const request=SelectionSchema.extend({quality:BuildRequestSchema.shape.quality,tile:BuildRequestSchema.shape.tile}).parse(await body(req));
+        send(200,{ready:await builder.ready(request.latitude,request.longitude,request.quality,request.tile)});return;
+      }
+      if(req.method==="POST" && url.pathname==="/api/city/nearby"){
         const request=SelectionSchema.extend({quality:BuildRequestSchema.shape.quality}).parse(await body(req));
-        send(200,{ready:await builder.ready(request.latitude,request.longitude,request.quality)});return;
+        send(200,{places:await builder.nearby(request.latitude,request.longitude,request.quality)});return;
       }
       if(req.method==="POST" && url.pathname==="/api/city/catalog"){
         const controller=new AbortController();res.once("close",()=>{if(!res.writableEnded)controller.abort();});
         const area=SelectionSchema.parse(await body(req));const {id,catalog}=await builder.discover(area.latitude,area.longitude,controller.signal);
-        send(200,{id,city:catalog.city,year:catalog.year,license:catalog.license,sourceBytes:catalog.files.reduce((n,f)=>n+f.bytes,0),files:catalog.files.length,planner:builder.status().planner});return;
+        send(200,{id,city:catalog.city,year:catalog.year,license:catalog.license,sourceBytes:catalog.files.reduce((n,f)=>n+f.bytes,0),files:catalog.files.length,datasets:(catalog.datasets??[catalog]).map(d=>({city:d.city,year:d.year})),planner:builder.status().planner});return;
       }
       if(req.method==="POST" && url.pathname==="/api/city/jobs"){
         const request=BuildRequestSchema.parse(await body(req));send(202,builder.start(request.catalogId,request.quality,request.tile));return;

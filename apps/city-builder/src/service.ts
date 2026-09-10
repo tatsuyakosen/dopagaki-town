@@ -18,8 +18,8 @@ const readyDirectory=`${root}.local/city-build/ready`;
 const TTL=24*60*60*1000;
 const hash=(text:string)=>createHash("sha256").update(text).digest("hex").slice(0,24);
 const BuildResultSchema=z.object({manifest:CityManifestSchema,stats:z.record(z.string(),z.number().finite())});
-const ReadySchema=z.object({stageId:z.string().regex(/^[a-f0-9]{24}$/),createdAt:z.number(),vertices:z.number(),gzipBytes:z.number()}).strict();
-const readyKey=(latitude:number,longitude:number,quality:Quality,provider:string)=>hash(JSON.stringify(["terrain-stream-v1",latitude,longitude,quality,provider]));
+const ReadySchema=z.object({tile:AreaTileSchema,quality:z.enum(["low","balanced"]),provider:z.enum(["rules","gemini-adk"]),stageId:z.string().regex(/^[a-f0-9]{24}$/),createdAt:z.number(),vertices:z.number(),gzipBytes:z.number()}).strict();
+const readyKey=(tile:AreaTile,quality:Quality,provider:string)=>hash(JSON.stringify(["terrain-stream-v2",tile.latitude,tile.longitude,tile.x,tile.z,quality,provider]));
 type Progress={phase:string;completed?:number;total?:number;bytes?:number};
 export interface Job {id:string;state:"running"|"ready"|"failed"|"cancelled";phase:string;createdAt:number;updatedAt:number;progress:Progress;provider:string;stageId?:string;stats?:Record<string,number>;code?:string}
 type Entry={catalog:Catalog;createdAt:number};
@@ -65,18 +65,31 @@ export class CityBuilder {
   private active:{id:string;controller:AbortController}|undefined;
   private discovering=false;
   status():{planner:string;busy:boolean}{return {planner:cityPlannerEnabled()?"gemini-adk":"rules",busy:Boolean(this.active)};}
-  async ready(latitude:number,longitude:number,quality:Quality):Promise<z.infer<typeof ReadySchema>|null>{
+  async ready(latitude:number,longitude:number,quality:Quality,tile:AreaTile={latitude,longitude,x:0,z:0}):Promise<z.infer<typeof ReadySchema>|null>{
+    AreaTileSchema.parse(tile);if(tile.latitude!==latitude||tile.longitude!==longitude)throw new Error("TILE_ORIGIN_MISMATCH");
     try{
-      const path=`${readyDirectory}/${readyKey(latitude,longitude,quality,this.status().planner)}.json`;
+      const path=`${readyDirectory}/${readyKey(tile,quality,this.status().planner)}.json`;
       const info=await stat(path);if(info.size>2048||Date.now()-info.mtimeMs>TTL)return null;
       const record=ReadySchema.parse(JSON.parse(await readFile(path,"utf8")) as unknown);
-      if(Date.now()-record.createdAt>TTL)return null;
+      if(Date.now()-record.createdAt>TTL||readyKey(record.tile,record.quality,record.provider)!==readyKey(tile,quality,this.status().planner))return null;
       await readStage(record.stageId,true);await stat(`${stages}/${record.stageId}.json`);return record;
     }catch{return null;}
   }
+  async nearby(latitude:number,longitude:number,quality:Quality):Promise<{latitude:number;longitude:number;distanceMeters:number}[]>{
+    const candidates:{latitude:number;longitude:number;distanceMeters:number}[]=[];
+    for(const name of (await readdir(readyDirectory).catch(()=>[] as string[])).filter(n=>/^[a-f0-9]{24}\.json$/.test(n)).slice(0,128))try{
+      const path=readyDirectory+"/"+name;const info=await stat(path);if(info.size>2048||Date.now()-info.mtimeMs>TTL)continue;
+      const record=ReadySchema.parse(JSON.parse(await readFile(path,"utf8")) as unknown),tile=record.tile;
+      if(tile.x||tile.z||record.quality!==quality||record.provider!==this.status().planner)continue;
+      const distanceMeters=Math.hypot((tile.latitude-latitude)*110574,(tile.longitude-longitude)*111320*Math.cos(latitude*Math.PI/180));
+      if(distanceMeters<10||distanceMeters>5000)continue;
+      if(await this.ready(tile.latitude,tile.longitude,quality))candidates.push({latitude:tile.latitude,longitude:tile.longitude,distanceMeters:Math.round(distanceMeters)});
+    }catch{/* Incomplete or expired entries are not advertised. */}
+    return candidates.sort((a,b)=>a.distanceMeters-b.distanceMeters).slice(0,3);
+  }
   async discover(latitude:number,longitude:number,signal?:AbortSignal):Promise<{id:string;catalog:Catalog}> {
     if(this.discovering)throw new Error("BUSY");
-    const key=hash(JSON.stringify([latitude,longitude]));const previous=this.catalogs.get(key);
+    const key=hash(JSON.stringify(["catalog-v2",latitude,longitude]));const previous=this.catalogs.get(key);
     if(previous && Date.now()-previous.createdAt<15*60*1000)return {id:key,catalog:previous.catalog};
     this.discovering=true;
     try{
@@ -104,7 +117,7 @@ export class CityBuilder {
     if(!entry || Date.now()-entry.createdAt>15*60*1000)throw new Error("CATALOG_EXPIRED");
     if(tile){AreaTileSchema.parse(tile);const expected=tileCoordinates(tile);
       if(Math.abs(expected.latitude-entry.catalog.latitude)>.000003||Math.abs(expected.longitude-entry.catalog.longitude)>.000003)throw new Error("TILE_CATALOG_MISMATCH");}
-    const key=hash(JSON.stringify(["terrain-stream-v1",entry.catalog,quality,this.status().planner,tile]));
+    const key=hash(JSON.stringify(["terrain-stream-v2",entry.catalog,quality,this.status().planner,tile]));
     const previous=this.jobs.get(this.completed.get(key)??"");
     if(previous?.stageId && Date.now()-previous.createdAt<TTL && existsSync(`${stages}/${previous.stageId}.json`) && existsSync(`${stages}/${previous.stageId}.gz`))return previous;
     if(this.active)throw new Error("BUSY");
@@ -139,12 +152,12 @@ export class CityBuilder {
       controller.signal.throwIfAborted();
       job.stageId=stageId;job.stats={...result.stats,gzipBytes:compressed.length,totalSeconds:(Date.now()-job.createdAt)/1000,lod:plan.lod};
       job.state="ready";job.phase="ready";this.completed.set(key,job.id);
-      if(tile?.x===0&&tile.z===0){
+      if(tile){
         await mkdir(readyDirectory,{recursive:true});
-        const path=`${readyDirectory}/${readyKey(tile.latitude,tile.longitude,quality,job.provider)}.json`;
-        await writeFile(`${path}.tmp`,JSON.stringify({stageId,createdAt:Date.now(),vertices,gzipBytes:compressed.length}));await rename(`${path}.tmp`,path);
+        const path=`${readyDirectory}/${readyKey(tile,quality,job.provider)}.json`;
+        await writeFile(`${path}.tmp`,JSON.stringify({tile,quality,provider:job.provider,stageId,createdAt:Date.now(),vertices,gzipBytes:compressed.length}));await rename(`${path}.tmp`,path);
         const records=await Promise.all((await readdir(readyDirectory)).map(async name=>({name,info:await stat(`${readyDirectory}/${name}`)})));
-        for(const record of records.sort((a,b)=>b.info.mtimeMs-a.info.mtimeMs).slice(32))await unlink(`${readyDirectory}/${record.name}`);
+        for(const record of records.sort((a,b)=>b.info.mtimeMs-a.info.mtimeMs).slice(128))await unlink(`${readyDirectory}/${record.name}`);
       }
       while(this.completed.size>32)this.completed.delete(this.completed.keys().next().value!);
       await pruneStages();
