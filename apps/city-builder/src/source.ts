@@ -15,7 +15,8 @@ export type Download=(url:string,limit:number,cache?:boolean)=>Promise<{data:Buf
 
 export function checkUrl(value:string):string{
   let url:URL;try{url=new URL(value);}catch{throw new Error("SOURCE_URL_REJECTED");}
-  if(url.protocol!=="https:"||!["api.plateauview.mlit.go.jp","assets.cms.plateau.reearth.io"].includes(url.hostname)||url.port||url.username||url.password||url.hash)throw new Error("SOURCE_URL_REJECTED");
+  if(url.protocol!=="https:"||!["api.plateauview.mlit.go.jp","assets.cms.plateau.reearth.io","cyberjapandata.gsi.go.jp"].includes(url.hostname)||url.port||url.username||url.password||url.hash)throw new Error("SOURCE_URL_REJECTED");
+  if(url.hostname==="cyberjapandata.gsi.go.jp"&&(url.search||!/^\/xyz\/dem\/14\/\d{1,5}\/\d{1,5}\.txt$/.test(url.pathname)))throw new Error("SOURCE_URL_REJECTED");
   if(url.hostname==="assets.cms.plateau.reearth.io"&&(url.search||!url.pathname.startsWith("/assets/")))throw new Error("SOURCE_URL_REJECTED");
   return url.href;
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AreaTileSchema } from "./area.js";
 
 const number = z.number().finite();
 const point = z.tuple([number, number, number]);
@@ -27,10 +28,11 @@ export const CityManifestSchema = z.object({
   extentMeters: z.literal(1000),
   playableHalfSize: number.min(20).max(500),
   spawn: point,
+  tile: AreaTileSchema.optional(),
   sources: z.array(z.object({
     title: z.string().min(1).max(300),
     provider: z.string().min(1).max(160),
-    datasetYear: z.number().int().min(2000).max(2100),
+    datasetYear: z.number().int().min(2000).max(2100).nullable(),
     surveyYear: z.number().int().min(1900).max(2100).nullable(),
     url: publicUrl,
     license: z.string().min(1).max(200),

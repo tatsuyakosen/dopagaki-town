@@ -32,9 +32,14 @@
       </section>
       <div class="toolbar">
         <label>描画品質 <select id="quality"><option value="balanced">標準</option><option value="low">軽量</option><option value="high">高品質</option></select></label>
-        <button id="reset" type="button">開始地点へ</button>
+        <button id="reset" type="button">足場へ戻る</button>
         <button id="gate" type="button" hidden>検証ゲート：開</button>
       </div>
+      <section id="area-map" hidden aria-label="1kmエリアの読み込み状況">
+        <p>北 ↑ · 1km × 1km</p><canvas id="area-canvas" width="160" height="160" aria-label="青は歩ける街区、暗色は未読込、茶色は取得失敗、黄色は現在地"></canvas>
+        <p>青：歩ける範囲</p><p id="stream-status" role="status">周辺の街区を準備します。</p>
+        <button id="retry-area" type="button">周辺を再試行</button>
+      </section>
       <details class="credits">
         <summary>データ出典・再現の範囲</summary>
         <div id="provenance"></div>

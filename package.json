@@ -29,6 +29,7 @@
     "check:publish": "node --import tsx scripts/repository-safety.ts",
     "check:city-bundle": "node --import tsx scripts/check-city-bundle.ts",
     "verify:city-walk": "node --import tsx scripts/verify-city-walk.ts",
+    "verify:city-area": "node --import tsx scripts/verify-city-area.ts",
     "preview:client": "vite preview --config apps/game-client/vite.config.ts --host 127.0.0.1",
     "test:city-converter": "vitest run apps/city-builder/src/converter.test.ts apps/city-builder/src/source.test.ts",
     "test:soak:m6": "playwright test --config playwright.soak.config.ts",

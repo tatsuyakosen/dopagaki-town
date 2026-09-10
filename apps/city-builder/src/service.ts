@@ -9,13 +9,17 @@ import { z } from "zod";
 import { CityManifestSchema } from "../../../packages/contracts/src/city.js";
 import { CatalogSchema, type Catalog, type Quality } from "./contracts.js";
 import { cityPlannerEnabled, planCity } from "../../director-api/src/city-planner.js";
+import { AreaTileSchema, tileCoordinates, type AreaTile } from "../../../packages/contracts/src/area.js";
 
 const root=fileURLToPath(new URL("../../../",import.meta.url));
 const stages=`${root}.local/city-build/stages`;
 const catalogDirectory=`${root}.local/city-build/catalogs`;
+const readyDirectory=`${root}.local/city-build/ready`;
 const TTL=24*60*60*1000;
 const hash=(text:string)=>createHash("sha256").update(text).digest("hex").slice(0,24);
 const BuildResultSchema=z.object({manifest:CityManifestSchema,stats:z.record(z.string(),z.number().finite())});
+const ReadySchema=z.object({stageId:z.string().regex(/^[a-f0-9]{24}$/),createdAt:z.number(),vertices:z.number(),gzipBytes:z.number()}).strict();
+const readyKey=(latitude:number,longitude:number,quality:Quality,provider:string)=>hash(JSON.stringify(["terrain-stream-v1",latitude,longitude,quality,provider]));
 type Progress={phase:string;completed?:number;total?:number;bytes?:number};
 export interface Job {id:string;state:"running"|"ready"|"failed"|"cancelled";phase:string;createdAt:number;updatedAt:number;progress:Progress;provider:string;stageId?:string;stats?:Record<string,number>;code?:string}
 type Entry={catalog:Catalog;createdAt:number};
@@ -61,7 +65,16 @@ export class CityBuilder {
   private active:{id:string;controller:AbortController}|undefined;
   private discovering=false;
   status():{planner:string;busy:boolean}{return {planner:cityPlannerEnabled()?"gemini-adk":"rules",busy:Boolean(this.active)};}
-  async discover(latitude:number,longitude:number):Promise<{id:string;catalog:Catalog}> {
+  async ready(latitude:number,longitude:number,quality:Quality):Promise<z.infer<typeof ReadySchema>|null>{
+    try{
+      const path=`${readyDirectory}/${readyKey(latitude,longitude,quality,this.status().planner)}.json`;
+      const info=await stat(path);if(info.size>2048||Date.now()-info.mtimeMs>TTL)return null;
+      const record=ReadySchema.parse(JSON.parse(await readFile(path,"utf8")) as unknown);
+      if(Date.now()-record.createdAt>TTL)return null;
+      await readStage(record.stageId,true);await stat(`${stages}/${record.stageId}.json`);return record;
+    }catch{return null;}
+  }
+  async discover(latitude:number,longitude:number,signal?:AbortSignal):Promise<{id:string;catalog:Catalog}> {
     if(this.discovering)throw new Error("BUSY");
     const key=hash(JSON.stringify([latitude,longitude]));const previous=this.catalogs.get(key);
     if(previous && Date.now()-previous.createdAt<15*60*1000)return {id:key,catalog:previous.catalog};
@@ -74,7 +87,7 @@ export class CityBuilder {
           if(catalog.latitude===latitude && catalog.longitude===longitude){this.catalogs.set(key,{catalog,createdAt:info.mtimeMs});return {id:key,catalog};}
         }
       }catch{/* A missing/expired cache requires a new catalog check. */}
-      const catalog=CatalogSchema.parse(await this.worker({action:"discover",latitude,longitude},AbortSignal.timeout(90_000)));
+      const catalog=CatalogSchema.parse(await this.worker({action:"discover",latitude,longitude},signal?AbortSignal.any([signal,AbortSignal.timeout(90_000)]):AbortSignal.timeout(90_000)));
       this.catalogs.delete(key);this.catalogs.set(key,{catalog,createdAt:Date.now()});
       while(this.catalogs.size>16)this.catalogs.delete(this.catalogs.keys().next().value!);
       if(this.worker===runWorker){
@@ -86,31 +99,34 @@ export class CityBuilder {
       return {id:key,catalog};
     }finally{this.discovering=false;}
   }
-  start(catalogId:string,quality:Quality):Job {
+  start(catalogId:string,quality:Quality,tile?:AreaTile):Job {
     const entry=this.catalogs.get(catalogId);
     if(!entry || Date.now()-entry.createdAt>15*60*1000)throw new Error("CATALOG_EXPIRED");
-    const key=hash(JSON.stringify(["converter-ts-v1",entry.catalog,quality,this.status().planner]));
+    if(tile){AreaTileSchema.parse(tile);const expected=tileCoordinates(tile);
+      if(Math.abs(expected.latitude-entry.catalog.latitude)>.000003||Math.abs(expected.longitude-entry.catalog.longitude)>.000003)throw new Error("TILE_CATALOG_MISMATCH");}
+    const key=hash(JSON.stringify(["terrain-stream-v1",entry.catalog,quality,this.status().planner,tile]));
     const previous=this.jobs.get(this.completed.get(key)??"");
     if(previous?.stageId && Date.now()-previous.createdAt<TTL && existsSync(`${stages}/${previous.stageId}.json`) && existsSync(`${stages}/${previous.stageId}.gz`))return previous;
     if(this.active)throw new Error("BUSY");
     const id=randomBytes(12).toString("hex");const controller=new AbortController();
     const job:Job={id,state:"running",phase:"plan",provider:this.status().planner,createdAt:Date.now(),updatedAt:Date.now(),progress:{phase:"plan"}};
     this.jobs.set(id,job);this.active={id,controller};
-    while(this.jobs.size>16)this.jobs.delete(this.jobs.keys().next().value!);
-    void this.execute(job,key,entry.catalog,quality,controller);
+    while(this.jobs.size>32)this.jobs.delete(this.jobs.keys().next().value!);
+    void this.execute(job,key,entry.catalog,quality,controller,tile);
     return job;
   }
-  private async execute(job:Job,key:string,catalog:Catalog,quality:Quality,controller:AbortController):Promise<void> {
+  private async execute(job:Job,key:string,catalog:Catalog,quality:Quality,controller:AbortController,tile?:AreaTile):Promise<void> {
     let timedOut=false;
     const temporaryFiles:string[]=[];
     const timeout=setTimeout(()=>{timedOut=true;controller.abort();},240_000);
     try{
       const plan=await this.planner(catalog,quality,AbortSignal.any([controller.signal,AbortSignal.timeout(30_000)]));
       job.provider=plan.provider;
-      const raw=await this.worker({action:"build",catalog,lod:plan.lod},controller.signal,p=>{job.progress=p;job.phase=p.phase;job.updatedAt=Date.now();});
+      const raw=await this.worker({action:"build",catalog,lod:plan.lod,...(tile?{tile}:{})},controller.signal,p=>{job.progress=p;job.phase=p.phase;job.updatedAt=Date.now();});
       controller.signal.throwIfAborted();
       const result=BuildResultSchema.parse(raw);
       if(result.manifest.mode!=="survey")throw new Error("SURVEY_REQUIRED");
+      if(tile&&JSON.stringify(result.manifest.tile)!==JSON.stringify(tile))throw new Error("TILE_OUTPUT_MISMATCH");
       const vertices=result.manifest.meshes.reduce((n,m)=>n+m.positions.length/3,0);
       if(vertices>(plan.lod===1?40_000:80_000)||result.manifest.meshes.length>600)throw new Error("GEOMETRY_BUDGET");
       const json=JSON.stringify(result.manifest);if(Buffer.byteLength(json)>4*1024*1024)throw new Error("GEOMETRY_BUDGET");
@@ -123,7 +139,14 @@ export class CityBuilder {
       controller.signal.throwIfAborted();
       job.stageId=stageId;job.stats={...result.stats,gzipBytes:compressed.length,totalSeconds:(Date.now()-job.createdAt)/1000,lod:plan.lod};
       job.state="ready";job.phase="ready";this.completed.set(key,job.id);
-      while(this.completed.size>16)this.completed.delete(this.completed.keys().next().value!);
+      if(tile?.x===0&&tile.z===0){
+        await mkdir(readyDirectory,{recursive:true});
+        const path=`${readyDirectory}/${readyKey(tile.latitude,tile.longitude,quality,job.provider)}.json`;
+        await writeFile(`${path}.tmp`,JSON.stringify({stageId,createdAt:Date.now(),vertices,gzipBytes:compressed.length}));await rename(`${path}.tmp`,path);
+        const records=await Promise.all((await readdir(readyDirectory)).map(async name=>({name,info:await stat(`${readyDirectory}/${name}`)})));
+        for(const record of records.sort((a,b)=>b.info.mtimeMs-a.info.mtimeMs).slice(32))await unlink(`${readyDirectory}/${record.name}`);
+      }
+      while(this.completed.size>32)this.completed.delete(this.completed.keys().next().value!);
       await pruneStages();
     }catch(error){
       job.state=controller.signal.aborted&&!timedOut?"cancelled":"failed";

@@ -54,4 +54,9 @@ describe("bounded city jobs",()=>{
     await vi.waitFor(()=>expect(builder.get(job.id)?.state).toBe("failed"));expect(job.stageId).toBeUndefined();
   });
   it("requires a reviewed catalog before building",()=>expect(()=>new CityBuilder().start("0".repeat(24),"low")).toThrow("CATALOG_EXPIRED"));
+  it("rejects a tile tied to a different catalog location",async()=>{
+    const worker:typeof runWorker=()=>Promise.resolve(catalog);const builder=new CityBuilder(worker,planner);
+    const area=await builder.discover(catalog.latitude,catalog.longitude);
+    expect(()=>builder.start(area.id,"low",{latitude:catalog.latitude,longitude:catalog.longitude,x:1,z:0})).toThrow("TILE_CATALOG_MISMATCH");
+  });
 });

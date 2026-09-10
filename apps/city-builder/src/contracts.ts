@@ -1,10 +1,11 @@
 import { z } from "zod";
+import { AreaTileSchema } from "../../../packages/contracts/src/area.js";
 
 export const SelectionSchema = z.object({
   latitude: z.number().finite().min(20).max(46),
   longitude: z.number().finite().min(122).max(154),
 }).strict();
-export const BuildRequestSchema = z.object({catalogId:z.string().regex(/^[a-f0-9]{24}$/), quality:z.enum(["low","balanced"])}).strict();
+export const BuildRequestSchema = z.object({catalogId:z.string().regex(/^[a-f0-9]{24}$/), quality:z.enum(["low","balanced"]),tile:AreaTileSchema.optional()}).strict();
 export const CatalogSchema = SelectionSchema.extend({
   city:z.string().max(100),year:z.number().int().min(2000).max(2100),license:z.literal("CC BY 4.0"),
   files:z.array(z.object({url:z.string().url(),bytes:z.number().nonnegative().max(32*1024*1024),kind:z.enum(["bldg","tran"])}).strict()).min(2).max(8),

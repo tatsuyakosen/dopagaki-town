@@ -16,16 +16,21 @@ export function createCityHandler(builder=new CityBuilder()):(req:IncomingMessag
     const url=new URL(req.url??"/","http://city.local");
     if(!url.pathname.startsWith("/api/city/")){next();return;}
     res.setHeader("Cache-Control","no-store");res.setHeader("X-Content-Type-Options","nosniff");
-    const send=(status:number,data:unknown)=>{res.statusCode=status;res.setHeader("Content-Type","application/json; charset=utf-8");res.end(JSON.stringify(data));};
+    const send=(status:number,data:unknown)=>{if(res.destroyed||res.writableEnded)return;res.statusCode=status;res.setHeader("Content-Type","application/json; charset=utf-8");res.end(JSON.stringify(data));};
     if(req.method!=="GET" && !allowedWrite(req)){send(403,{code:"ORIGIN_REJECTED"});return;}
     void (async()=>{
       if(req.method==="GET" && url.pathname==="/api/city/status"){send(200,builder.status());return;}
+      if(req.method==="POST" && url.pathname==="/api/city/ready"){
+        const request=SelectionSchema.extend({quality:BuildRequestSchema.shape.quality}).parse(await body(req));
+        send(200,{ready:await builder.ready(request.latitude,request.longitude,request.quality)});return;
+      }
       if(req.method==="POST" && url.pathname==="/api/city/catalog"){
-        const area=SelectionSchema.parse(await body(req));const {id,catalog}=await builder.discover(area.latitude,area.longitude);
+        const controller=new AbortController();res.once("close",()=>{if(!res.writableEnded)controller.abort();});
+        const area=SelectionSchema.parse(await body(req));const {id,catalog}=await builder.discover(area.latitude,area.longitude,controller.signal);
         send(200,{id,city:catalog.city,year:catalog.year,license:catalog.license,sourceBytes:catalog.files.reduce((n,f)=>n+f.bytes,0),files:catalog.files.length,planner:builder.status().planner});return;
       }
       if(req.method==="POST" && url.pathname==="/api/city/jobs"){
-        const request=BuildRequestSchema.parse(await body(req));send(202,builder.start(request.catalogId,request.quality));return;
+        const request=BuildRequestSchema.parse(await body(req));send(202,builder.start(request.catalogId,request.quality,request.tile));return;
       }
       const jobMatch=/^\/api\/city\/jobs\/([a-f0-9]{24})$/.exec(url.pathname);
       if(jobMatch && (req.method==="GET" || req.method==="DELETE")){

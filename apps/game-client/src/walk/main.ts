@@ -16,9 +16,11 @@ import "@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent.js";
 import "@babylonjs/core/Meshes/Builders/capsuleBuilder.js";
 import "@babylonjs/core/Culling/ray.js";
 import { createFixture } from "./fixture.js";
-import { movementVector, frameSeconds } from "./movement.js";
+import { movementVector, frameSeconds, movementSteps } from "./movement.js";
 import { createWalkWorld, type WalkWorld } from "./world.js";
 import { CollisionGrid } from "./spatial.js";
+import { AreaStreamer } from "./streaming.js";
+import { drawMinimap } from "./minimap.js";
 import "./style.css";
 
 function element<T extends HTMLElement>(id:string):T {
@@ -45,9 +47,10 @@ async function readManifest():Promise<CityManifest> {
 function credits(manifest:CityManifest):void {
   element("place-name").textContent=manifest.title;
   element("dataset-kind").textContent=manifest.mode==="survey"?"実データの形状 / 外装・夕景は演出":"架空の操作検証 / 実際の大阪ではありません";
-  element("scope").textContent=`計画範囲 1km × 1km / 歩行検証 ${manifest.playableHalfSize*2}m × ${manifest.playableHalfSize*2}m`;
+  element("scope").textContent=manifest.tile?"1km × 1km / 周辺の街区を順に読み込み":`歩行範囲 ${manifest.playableHalfSize*2}m × ${manifest.playableHalfSize*2}m`;
   const parent=element("provenance");
-  for(const source of manifest.sources){const p=document.createElement("p");p.textContent=`${source.attribution} / データ年度 ${source.datasetYear} / 測量年度 ${source.surveyYear??"未確認"} / 取得 ${source.retrievedAt}`;
+  parent.replaceChildren();
+  for(const source of manifest.sources){const p=document.createElement("p");p.textContent=`${source.attribution} / データ年度 ${source.datasetYear??"不明"} / 測量年度 ${source.surveyYear??"未確認"} / 取得 ${source.retrievedAt}`;
     const a=document.createElement("a");a.href=source.url;a.textContent="データ配布元";a.target="_blank";a.rel="noopener noreferrer";
     const license=document.createElement("a");license.href=source.licenseUrl;license.textContent=source.license;license.target="_blank";license.rel="noopener noreferrer";p.append(" · ",a," · ",license);parent.append(p);}
   for(const text of manifest.limitations){const p=document.createElement("p");p.textContent=text;parent.append(p);}
@@ -57,7 +60,7 @@ function credits(manifest:CityManifest):void {
 async function boot():Promise<void> {
   const loadedAt=performance.now();
   let phase="data";
-  let engine:Engine|null=null;let world:WalkWorld|null=null;
+  let engine:Engine|null=null;let world:WalkWorld|null=null;let streamer:AreaStreamer|undefined;
   try{
     const manifest=await readManifest();
     phase="engine";
@@ -74,7 +77,7 @@ async function boot():Promise<void> {
     const shadows=new ShadowGenerator(1024,sun);shadows.usePercentageCloserFiltering=true;shadows.bias=.001;shadows.normalBias=.025;
     phase="geometry";
     world=await createWalkWorld(scene,manifest,shadows,(done,total)=>{message.textContent=`街区を配置中 ${done} / ${total}。操作画面を準備しています。`;});const activeWorld=world;
-    const grid=new CollisionGrid(world.colliders);let nearby=world.colliders,lastCell="";
+    let grid=new CollisionGrid(world.colliders),gridRevision=world.revision;let nearby=world.colliders,lastCell="";
     const camera=new FreeCamera("walk-camera",new Vector3(0,3,10),scene);camera.inputs.clear();camera.minZ=.15;camera.maxZ=1500;camera.fov=.85;
     scene.activeCamera=camera;
     const player=MeshBuilder.CreateCapsule("walker",{height:1.8,radius:.35,tessellation:12},scene);
@@ -84,6 +87,17 @@ async function boot():Promise<void> {
     const skin=new StandardMaterial("walker-head-material",scene);skin.diffuseColor=Color3.FromHexString("#c7ab83");visor.material=skin;visor.isPickable=false;
     let yaw=Math.PI, pitch=.32, verticalSpeed=0, paused=true, drag=false, gateClosed=false;
     const spawn=new Vector3(manifest.spawn[0],manifest.spawn[1],manifest.spawn[2]);
+    let lowestGround=Math.min(...manifest.meshes.filter(m=>m.kind!=="building").flatMap(m=>m.positions.filter((_,i)=>i%3===1)));
+    const safePosition=spawn.clone();
+    if(manifest.tile){
+      const seenSources=new Set(manifest.sources.map(source=>source.sha256));
+      streamer=new AreaStreamer(manifest,activeWorld,initialLow?"low":"balanced",text=>{element("stream-status").textContent=text;},block=>{
+        lowestGround=Math.min(lowestGround,...block.meshes.filter(m=>m.kind!=="building").flatMap(m=>m.positions.filter((_,i)=>i%3===1)));
+        for(const source of block.sources)if(!seenSources.has(source.sha256)){seenSources.add(source.sha256);manifest.sources.push(source);}
+        credits(manifest);
+      });
+      element("area-map").hidden=false;element("retry-area").addEventListener("click",()=>streamer?.retry());
+    }
     phase="spawn";
     // A building roof is never accepted as a street spawn; terrain/road data is required.
     const spawnRay=new Ray(new Vector3(spawn.x,2000,spawn.z),Vector3.Down(),4000);
@@ -91,7 +105,7 @@ async function boot():Promise<void> {
     if(!hit?.hit||!hit.pickedPoint||!activeWorld.surfaces.has(hit.pickedMesh as Mesh))throw new Error("UNSAFE_SPAWN");
     spawn.y=hit.pickedPoint.y+.95;player.position.copyFrom(spawn);
     function setPaused(value:boolean):void{paused=value;keys.clear();pause.textContent=value?"再開":"一時停止";notice.hidden=!value;if(value){notice.querySelector("h1")!.textContent="街歩きを一時停止";message.textContent="再開すると同じ場所から歩けます。";}else canvas.focus();}
-    function reset():void{keys.clear();verticalSpeed=0;player.position.copyFrom(spawn);}
+    function reset():void{keys.clear();verticalSpeed=0;player.position.copyFrom(safePosition);}
     pause.disabled=false;pause.addEventListener("click",()=>setPaused(!paused));
     start.addEventListener("click",()=>{setPaused(false);start.textContent="再開する";});
     element("reset").addEventListener("click",reset);
@@ -120,18 +134,27 @@ async function boot():Promise<void> {
     let metricsAt=0,slowSeconds=0,autoReduced=initialLow;
     scene.onBeforeRenderObservable.add(()=>{
       const dt=frameSeconds(engine!.getDeltaTime());
+      if(gridRevision!==activeWorld.revision){grid=new CollisionGrid(activeWorld.colliders);gridRevision=activeWorld.revision;lastCell="";}
       const cell=grid.key(player.position.x,player.position.z);
       if(cell!==lastCell){lastCell=cell;nearby=grid.nearby(player.position.x,player.position.z);player.surroundingMeshes=[...nearby];}
       if(!paused){
         yaw+=(Number(keys.has("ArrowRight"))-Number(keys.has("ArrowLeft")))*dt*1.7;
         pitch=Math.max(.05,Math.min(.95,pitch+(Number(keys.has("ArrowDown"))-Number(keys.has("ArrowUp")))*dt));
-        const movement=movementVector(keys,yaw);const previousY=player.position.y;
+        const movement=movementVector(keys,yaw);
+        for(const step of movementSteps(dt)){
+        const previousY=player.position.y;
         player.computeWorldMatrix(true);
-        verticalSpeed=Math.max(-25,verticalSpeed-18*dt);
-        player.moveWithCollisions(new Vector3(movement.x*movement.speed*dt,verticalSpeed*dt,movement.z*movement.speed*dt));
+        verticalSpeed=Math.max(-25,verticalSpeed-18*step);
+        let dx=movement.x*movement.speed*step,dz=movement.z*movement.speed*step;
+        if(streamer&&!streamer.canEnter(player.position.x+dx,player.position.z+dz)){dx=0;dz=0;}
+        player.moveWithCollisions(new Vector3(dx,verticalSpeed*step,dz));
         if(Math.abs(player.position.y-previousY)<.002)verticalSpeed=-.5;
+        }
         if(movement.x||movement.z)player.rotation.y=Math.atan2(movement.x,movement.z);
-        if(player.position.y<spawn.y-5 || Math.abs(player.position.x)>manifest.playableHalfSize+2 || Math.abs(player.position.z)>manifest.playableHalfSize+2)reset();
+        if(player.position.y<lowestGround-10 || Math.abs(player.position.x)>manifest.playableHalfSize+2 || Math.abs(player.position.z)>manifest.playableHalfSize+2)reset();
+        const ground=scene.pickWithRay(new Ray(player.position,Vector3.Down(),1.1),mesh=>activeWorld.surfaces.has(mesh as Mesh)&&nearby.has(mesh as Mesh));
+        if(ground?.hit&&ground.pickedPoint&&(!streamer||streamer.canEnter(player.position.x,player.position.z)))safePosition.copyFrom(player.position);
+        streamer?.update(player.position.x,player.position.z);
       }
       const target=player.position.add(new Vector3(0,.65,0));
       const direction=new Vector3(-Math.sin(yaw)*Math.cos(pitch),Math.sin(pitch),-Math.cos(yaw)*Math.cos(pitch));
@@ -143,7 +166,8 @@ async function boot():Promise<void> {
       camera.position.copyFrom(target.add(direction.scale(distance)));camera.setTarget(target);
       player.visibility=distance<1?.15:1;visor.visibility=player.visibility;
       if(!paused && !autoReduced){slowSeconds=engine!.getFps()<24?slowSeconds+dt:Math.max(0,slowSeconds-dt);if(slowSeconds>5){autoReduced=true;engine!.setHardwareScalingLevel(2.25);scene.shadowsEnabled=false;engine!.resize();element<HTMLSelectElement>("quality").value="low";element("performance-note").textContent="動作を軽くするため描画品質を下げました。";}}
-      if(performance.now()-metricsAt>500){metricsAt=performance.now();element("metrics").textContent=`${Math.round(engine!.getFps())} FPS · E ${player.position.x.toFixed(1)}m / N ${(-player.position.z).toFixed(1)}m`;}
+      if(performance.now()-metricsAt>500){metricsAt=performance.now();element("metrics").textContent=`${Math.round(engine!.getFps())} FPS · E ${player.position.x.toFixed(1)}m / N ${(-player.position.z).toFixed(1)}m`;
+        if(streamer)drawMinimap(element<HTMLCanvasElement>("area-canvas"),player.position.x,player.position.z,streamer.readyKeys,streamer.failedKeys);}
     });
     credits(manifest);hud.hidden=false;
     engine.runRenderLoop(()=>scene.render());
@@ -156,13 +180,14 @@ async function boot():Promise<void> {
     start.hidden=false;element("performance-note").textContent=`街区の読み込み ${( (performance.now()-loadedAt)/1000).toFixed(1)}秒`;
     notice.querySelector("h1")!.textContent=manifest.mode==="fixture"?"架空の検証ステージ":"実データの街区を歩く";
     message.textContent=manifest.mode==="fixture"?"このステージは操作と夕景表現の検証用です。大阪・梅田の街並みではありません。":"建物と地面は記録された年度のデータです。外装・窓・夕景は演出で、現在の外観や通行可能性を保証しません。";
+    if(new URLSearchParams(location.search).get("autostart")==="1")setPaused(false);
     window.addEventListener("resize",()=>engine!.resize());
-    window.addEventListener("pagehide",(event)=>{if(event.persisted){setPaused(true);return;}activeWorld.dispose();scene.dispose();engine!.dispose();});
+    window.addEventListener("pagehide",(event)=>{if(event.persisted){setPaused(true);return;}streamer?.dispose();activeWorld.dispose();scene.dispose();engine!.dispose();});
   }catch(error){
     const detail=error instanceof Error?error.message:"";
     const code=/webgl/i.test(detail)?"WEBGL_UNAVAILABLE":/^[A-Z_]{3,40}$/.test(detail)?detail:"RENDER_OR_DATA_INVALID";
     console.error("CITY_WALK_FAILED "+JSON.stringify({phase,code}));
-    world?.dispose();engine?.dispose();hud.hidden=true;pause.disabled=true;start.hidden=true;
+    streamer?.dispose();world?.dispose();engine?.dispose();hud.hidden=true;pause.disabled=true;start.hidden=true;
     notice.hidden=false;notice.querySelector("h1")!.textContent="実都市データを利用できません";
     message.textContent="データの有効期限切れ・形式不正・容量超過・安全な開始地点がない、または3D描画に非対応です。地図から街区を作り直すか、描画環境を確認してください。";
     if(code==="WEBGL_UNAVAILABLE")message.textContent="このブラウザではWebGLを利用できません。PCブラウザのグラフィック設定を確認して開き直してください。";

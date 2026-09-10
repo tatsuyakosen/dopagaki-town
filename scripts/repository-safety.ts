@@ -24,6 +24,7 @@ export function inspectPublishFile(path:string, bytes:Uint8Array):string[] {
   if ((forbidden.test(path) && !/(^|\/)\.env\.example$/.test(path)) || runtimeData.test(path)) issues.push("forbidden-file");
   if (bytes.byteLength>MAX_BYTES) issues.push("oversize-file");
   const text=Buffer.from(bytes).toString("utf8");
+  if(/\.txt$/i.test(path)&&text.split(/\r?\n/,2).some(line=>/^(?:-?\d+(?:\.\d+)?|e)(?:,(?:-?\d+(?:\.\d+)?|e)){255}$/.test(line)))issues.push("raw-elevation-data");
   if(secretPatterns.some(pattern=>pattern.test(text)))issues.push("possible-secret");
   // Detect literal secret assignments while allowing environment reads and clear templates.
   const assignments=text.matchAll(/(?:api[_-]?key|secret[_-]?key|password|access[_-]?token)\s*["']?\s*[:=]\s*["']([^"'\n]{12,})["']/gi);

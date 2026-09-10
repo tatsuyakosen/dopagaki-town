@@ -11,7 +11,10 @@ import type { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGener
 import type { CityManifest, CityMesh } from "@dopagaki/contracts";
 import { createCollisionMesh } from "./collision.js";
 
-export interface WalkWorld { colliders: Set<Mesh>; surfaces: Set<Mesh>; overlay: TransformNode; gate: Mesh | null; dispose: () => void }
+export interface WalkWorld {
+  colliders:Set<Mesh>;surfaces:Set<Mesh>;overlay:TransformNode;gate:Mesh|null;revision:number;vertices:number;
+  addBlock:(key:string,manifest:CityManifest)=>Promise<void>;removeBlock:(key:string)=>void;dispose:()=>void;
+}
 
 function makeFacade(scene: Scene, emissive: boolean): DynamicTexture {
   const texture = new DynamicTexture(emissive ? "window-light" : "facade", {width:256,height:256}, scene, true);
@@ -64,8 +67,16 @@ export async function createWalkWorld(scene: Scene, manifest: CityManifest, shad
   const terrain = new StandardMaterial("survey-terrain",scene);
   terrain.diffuseColor=Color3.FromHexString("#686766");terrain.specularColor.set(0,0,0);terrain.backFaceCulling=false;
   const collisionMaterial=new StandardMaterial("collision-two-sided",scene);collisionMaterial.backFaceCulling=false;
-  let yieldedAt=performance.now(),done=0;
-  for (const source of manifest.meshes) {
+  const objects=new Map<string,{visual:Mesh;collision:Mesh;references:Set<string>;vertices:number}>();
+  const blocks=new Map<string,Set<string>>();let revision=0,disposed=false;
+  async function addBlock(key:string,block:CityManifest):Promise<void>{
+    if(disposed||blocks.has(key))return;
+    if(block.origin.latitude!==manifest.origin.latitude||block.origin.longitude!==manifest.origin.longitude||block.origin.altitude!==manifest.origin.altitude)throw new Error("TILE_ORIGIN_MISMATCH");
+    const ids=new Set<string>();blocks.set(key,ids);let yieldedAt=performance.now(),done=0;
+    try{for (const source of block.meshes) {
+    if(disposed)throw new Error("CANCELLED");
+    const existing=objects.get(source.id);ids.add(source.id);
+    if(existing){existing.references.add(key);continue;}
     const data=geometry(source);
     const mesh=new Mesh(`visual-${source.id}`,scene);data.applyToMesh(mesh);
     mesh.parent=visualRoot;mesh.material=source.kind==="building"?facade:source.kind==="road"?road:terrain;
@@ -75,9 +86,20 @@ export async function createWalkWorld(scene: Scene, manifest: CityManifest, shad
     collision.parent=collisionRoot;collision.material=collisionMaterial;collision.isVisible=false;
     collision.checkCollisions=true;collision.isPickable=true;collision.freezeWorldMatrix();colliders.add(collision);
     if(source.kind!=="building") surfaces.add(collision);
+    objects.set(source.id,{visual:mesh,collision,references:new Set([key]),vertices:source.positions.length/3});
+    revision++;
     done++;
-    if(performance.now()-yieldedAt>6){progress(done,manifest.meshes.length);await new Promise<void>(resolve=>setTimeout(resolve,0));yieldedAt=performance.now();}
+    if(performance.now()-yieldedAt>6){progress(done,block.meshes.length);await new Promise<void>(resolve=>setTimeout(resolve,0));yieldedAt=performance.now();}
+    }}catch(error){removeBlock(key);throw error;}
+    revision++;
   }
+  function removeBlock(key:string):void{
+    for(const id of blocks.get(key)??[]){const object=objects.get(id);if(!object)continue;object.references.delete(key);
+      if(object.references.size)continue;shadows.removeShadowCaster(object.visual);colliders.delete(object.collision);surfaces.delete(object.collision);
+      object.visual.dispose();object.collision.dispose();objects.delete(id);
+    }blocks.delete(key);revision++;
+  }
+  await addBlock("initial",manifest);
   facade.freeze();road.freeze();terrain.freeze();collisionMaterial.freeze();
   const borderMaterial = new StandardMaterial("test-boundary",scene);
   borderMaterial.diffuseColor=Color3.FromHexString("#f3bc78");borderMaterial.emissiveColor=new Color3(.15,.08,.02);
@@ -94,5 +116,7 @@ export async function createWalkWorld(scene: Scene, manifest: CityManifest, shad
     gate.position.set(0,1.4,20);gate.parent=overlay;gate.material=borderMaterial;
     gate.checkCollisions=true;gate.setEnabled(false);colliders.add(gate);
   }
-  return {colliders,surfaces,overlay,gate,dispose:()=>{visualRoot.dispose(false,true);collisionRoot.dispose(false,true);overlay.dispose(false,true);colliders.clear();surfaces.clear();}};
+  return {colliders,surfaces,overlay,gate,addBlock,removeBlock,get revision(){return revision;},get vertices(){return [...objects.values()].reduce((n,o)=>n+o.vertices,0);},
+    dispose:()=>{disposed=true;for(const key of blocks.keys())removeBlock(key);visualRoot.dispose();collisionRoot.dispose();overlay.dispose(false,true);
+      facade.dispose(false,true);road.dispose();terrain.dispose();collisionMaterial.dispose();colliders.clear();surfaces.clear();}};
 }

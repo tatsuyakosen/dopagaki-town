@@ -1,4 +1,6 @@
 import { createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
+import type { Bounds } from "../../../packages/contracts/src/area.js";
 import type { z } from "zod";
 import { CityManifestSchema, type CityManifest } from "../../../packages/contracts/src/city.js";
 import { localFrame, triangulateRings, type Point } from "./geometry.js";
@@ -25,7 +27,7 @@ function readRing(ring:XmlNode|undefined,toLocal:(p:Point)=>Point):Point[]{
 
 export async function convert(
   paths:string[],rawMetadata:unknown,origin:Point,halfSize:number,spawn:Point,
-  maxLod:1|2=2,title="大阪・梅田 / 実データ街区",
+  maxLod:1|2=2,title="大阪・梅田 / 実データ街区",bounds?:Bounds,
 ):Promise<CityManifest>{
   const metadata=MetadataSchema.parse(rawMetadata);
   for(const field of [metadata.title,metadata.provider,metadata.license,metadata.attribution]){
@@ -59,7 +61,8 @@ export async function convert(
       let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
       for(const p of points){minX=Math.min(minX,p[0]);maxX=Math.max(maxX,p[0]);minZ=Math.min(minZ,p[2]);maxZ=Math.max(maxZ,p[2]);}
       // Preserve whole intersecting objects; a clipped edge must not become an invented wall.
-      if(maxX< -halfSize||minX>halfSize||maxZ< -halfSize||minZ>halfSize)return;
+      const window=bounds??{minX:-halfSize,maxX:halfSize,minZ:-halfSize,maxZ:halfSize};
+      if(maxX<window.minX||minX>window.maxX||maxZ<window.minZ||minZ>window.maxZ)return;
       const positions:number[]=[],indices:number[]=[];
       for(const rings of compounds){
         const result=triangulateRings(rings),base=positions.length/3;
@@ -67,7 +70,10 @@ export async function convert(
         for(const point of result.points)positions.push(...point);
       }
       vertices+=positions.length/3;
-      meshes.push({id:`mesh-${String(meshes.length).padStart(5,"0")}`,kind,positions,indices});
+      // Shared objects have the same identity across adjacent blocks in a common frame.
+      const id=createHash("sha256").update(JSON.stringify([kind,positions,indices])).digest("hex").slice(0,24);
+      if(meshes.some(mesh=>mesh.id===id)){vertices-=positions.length/3;return;}
+      meshes.push({id,kind,positions,indices});
       if(meshes.length>5000||vertices>500_000)throw new Error("GEOMETRY_BUDGET");
     },tag=>tag.uri===CORE&&tag.local==="cityObjectMember",tag=>{
       const srs=tag.attributes.srsName?.value;

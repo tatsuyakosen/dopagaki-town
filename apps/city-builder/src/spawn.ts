@@ -1,5 +1,6 @@
 import type { Mesh } from "./converter.js";
 import { round, type Point } from "./geometry.js";
+import type { Bounds } from "../../../packages/contracts/src/area.js";
 
 export function triangleHeight(x:number,z:number,[a,b,c]:[Point,Point,Point]):number|undefined{
   const d=(b[2]-c[2])*(a[0]-c[0])+(c[0]-b[0])*(a[2]-c[2]);if(Math.abs(d)<1e-7)return;
@@ -9,7 +10,7 @@ export function triangleHeight(x:number,z:number,[a,b,c]:[Point,Point,Point]):nu
   return u*a[1]+v*b[1]+(1-u-v)*c[1];
 }
 
-export function chooseSpawn(meshes:Mesh[],half=125):Point{
+export function chooseSpawn(meshes:Mesh[],half=125,bounds:Bounds={minX:-half,maxX:half,minZ:-half,maxZ:half}):Point{
   const roads:[Point,Point,Point][]=[],buildings:[Point,Point,Point][]=[],candidates:Point[]=[];
   for(const mesh of meshes){
     const points:Point[]=[];
@@ -21,8 +22,9 @@ export function chooseSpawn(meshes:Mesh[],half=125):Point{
     }
   }
   const offsets=[[0,0],[.6,0],[-.6,0],[0,.6],[0,-.6],[.45,.45],[-.45,.45],[.45,-.45],[-.45,-.45]] as const;
-  for(const [x,y,z] of candidates.sort((a,b)=>a[0]**2+a[2]**2-b[0]**2-b[2]**2)){
-    if(Math.max(Math.abs(x),Math.abs(z))>half-2)continue;
+  const centerX=(bounds.minX+bounds.maxX)/2,centerZ=(bounds.minZ+bounds.maxZ)/2;
+  for(const [x,y,z] of candidates.sort((a,b)=>(a[0]-centerX)**2+(a[2]-centerZ)**2-(b[0]-centerX)**2-(b[2]-centerZ)**2)){
+    if(x<bounds.minX+2||x>bounds.maxX-2||z<bounds.minZ+2||z>bounds.maxZ-2)continue;
     const clear=offsets.every(([dx,dz])=>{
       let ground:number|undefined;
       for(const triangle of roads){const h=triangleHeight(x+dx,z+dz,triangle);if(h!==undefined)ground=Math.max(ground??-Infinity,h);}
