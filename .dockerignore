@@ -15,3 +15,12 @@ coverage
 tests
 **/test
 scripts
+data/raw
+data/processed
+apps/game-client/public/city-data
+.local
+artifacts
+*.pem
+*.key
+*credentials*.json
+*service-account*.json

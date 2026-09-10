@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111a27" />
+    <meta name="description" content="DOPAGAKI TOWN — 出典を確認できる実都市街歩きプロトタイプ" />
+    <title>DOPAGAKI TOWN | 街歩き</title>
+  </head>
+  <body>
+    <canvas id="walk-canvas" tabindex="0" aria-label="街歩き3D画面。WASDで移動、Shiftでダッシュ、矢印キーで視点変更"></canvas>
+    <header class="topbar">
+      <a href="/map.html">DOPAGAKI <span>TOWN</span> / 地図へ</a>
+      <span class="mode-tag" id="mode-tag">自由に街歩き / ひとり</span>
+      <button id="pause" type="button" disabled>一時停止</button>
+    </header>
+    <main id="notice" class="notice" aria-live="polite">
+      <p class="eyebrow">YOUR CITY / DATA-FIRST WALK</p>
+      <h1>街のデータを確認中</h1>
+      <p id="load-message">出典情報と歩行可能な地面を読み込んでいます。</p>
+      <a id="fixture-link" href="/walk.html?fixture=1" hidden>架空の検証ステージで操作を試す</a>
+      <a href="/map.html">地図で街区を選ぶ</a>
+      <button id="start" type="button" hidden>歩き始める</button>
+    </main>
+    <div id="friend-labels" aria-hidden="true"></div>
+    <aside id="walk-hud" hidden>
+      <section class="location">
+        <p class="eyebrow" id="dataset-kind">DATASET</p>
+        <h2 id="place-name"></h2>
+        <p id="scope"></p>
+        <p id="metrics" aria-live="off"></p>
+        <p id="performance-note" aria-live="polite"></p>
+      </section>
+      <div class="toolbar">
+        <label>描画品質 <select id="quality"><option value="balanced">標準</option><option value="low">軽量</option><option value="high">高品質</option></select></label>
+        <button id="reset" type="button">開始地点へ</button>
+        <button id="gate" type="button" hidden>検証ゲート：開</button>
+      </div>
+      <details id="social-panel" class="social-panel" hidden open>
+        <summary>友達と街歩き <span>最大4人</span></summary>
+        <p id="social-status" role="status"></p>
+        <label for="social-name">表示名</label>
+        <input id="social-name" maxlength="20" required value="ゲスト" autocomplete="off" />
+        <div class="social-actions">
+          <button id="social-create" type="button">友達を招待する</button>
+          <button id="social-join" type="button" hidden>このルームに参加する</button>
+          <button id="social-copy" type="button" hidden>招待リンクをコピー</button>
+          <button id="social-leave" type="button" hidden>退出する</button>
+        </div>
+        <input id="social-invite" aria-label="招待リンク。コピーして共有してください" readonly hidden />
+        <ul id="social-members" aria-label="同じ街の参加者"></ul>
+        <div id="social-chat" hidden>
+          <div id="social-log" role="log" aria-label="ルームのチャット" aria-live="polite" aria-relevant="additions"></div>
+          <form id="social-form">
+            <label for="social-message">ルームにひとこと</label>
+            <div class="social-compose"><input id="social-message" maxlength="140" autocomplete="off" placeholder="ここで待ってるよ" disabled /><button id="social-send" type="submit" disabled>送信</button></div>
+          </form>
+        </div>
+        <p class="social-footnote">招待した相手に表示名と街の中の位置が共有されます。チャットはこのルーム内だけで表示します。</p>
+      </details>
+      <section id="area-map" hidden aria-label="1kmエリアの読み込み状況">
+        <p>北 ↑ · 1km × 1km</p><canvas id="area-canvas" width="160" height="160" aria-label="青は歩ける街区、橙色は読込中、暗色は未読込、茶色は取得失敗、黄色は現在地"></canvas>
+        <p>青：歩ける · 橙：読込中</p><p id="stream-status" role="status">周辺の街区を準備します。</p>
+        <button id="retry-area" type="button">周辺を再試行</button><a href="/map.html">別の場所を選ぶ</a>
+      </section>
+      <details class="measurement">
+        <summary>動作の重さを計測</summary>
+        <p>歩行中の60秒を記録します。結果はこの端末だけに保存でき、外部へ送信しません。</p>
+        <button id="measure" type="button">60秒の計測を開始</button>
+        <p id="measurement-status" role="status"></p>
+        <button id="download-performance" type="button" hidden>計測結果を保存</button>
+      </details>
+      <details class="credits">
+        <summary>データ出典・再現の範囲</summary>
+        <div id="provenance"></div>
+      </details>
+      <p class="controls">WASD 移動 · Shift ダッシュ · ドラッグ／矢印キー 視点 · Esc 停止<br />地下・建物内部は対象外。夕景・窓の光は演出です。</p>
+    </aside>
+    <script type="module" src="/src/walk/main.ts"></script>
+  </body>
+</html>

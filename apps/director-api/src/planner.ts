@@ -13,6 +13,8 @@ import {
   selectPatchCandidate,
   type VerifierContext,
 } from "@dopagaki/verifier";
+import { assertAdkRuntime } from "./runtime.js";
+export { assertAdkRuntime } from "./runtime.js";
 
 export const MAX_DIRECTOR_ATTEMPTS = 2;
 
@@ -244,11 +246,4 @@ export function createAdkGeminiGenerator(model: string): DirectorProposalGenerat
     if (finalText.length === 0) throw new Error("ADK Director returned no final text");
     return JSON.parse(finalText) as unknown;
   };
-}
-
-export function assertAdkRuntime(version: string): void {
-  const [major = 0, minor = 0] = version.split(".").map((value) => Number.parseInt(value, 10));
-  if (major < 24 || (major === 24 && minor < 13)) {
-    throw new Error("Gemini ADK mode requires Node.js 24.13 or newer");
-  }
 }

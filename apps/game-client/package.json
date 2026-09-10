@@ -6,6 +6,10 @@
   "dependencies": {
     "@babylonjs/core": "^9.22.2",
     "@dopagaki/contracts": "*",
-    "@dopagaki/world-core": "*"
+    "@dopagaki/world-core": "*",
+    "leaflet": "1.9.4"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.21"
   }
 }

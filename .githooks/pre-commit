@@ -1,0 +1,3 @@
+#!/bin/sh
+# Review staged blobs, not working copies. Never print matched secret values.
+npm run check:publish -- --staged
